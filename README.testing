@@ -1,0 +1,42 @@
+The testing script generates certificates and sets up the following
+- web server
+- reliable site server
+- oracle notary server
+- oracle signing server
+it then launches Firefox and Chrome and performs notarization.
+The script can be launched on any OS (install OpenSSL-Win32 on Win and python3 on Win and OSX).
+
+
+Before running the actual test, prepare the environment:
+
+1. Make sure the dirs "pagesigner-unittests", "pagesigner-oracles" and "pagesigner" are in the same dir
+2. Make sure Chrome is not running (including the background process systray icon)
+3. Run python3 run-test.py
+4. In Chrome install the helper app from the PageSigner menu.
+5. In Firefox goto
+	5.1 Edit->Preferences->Advanced->Certificates->View Certificates->Authorities->Import 
+	and choose pagesigner-unittests/certs/rootCA.cert select Trust this CA to identify websites -> OK
+	5.2 Tools->Add-ons->Extensions, enable PageSigner
+6. On Linux and OSX terminate run-test.py with Ctrl+C (it will close Chrome and Firefox automatically). On Windows use Ctrl+Break and close browsers manually.
+
+After preparing the environment, you can run the actual test:
+python3 run-test.py 
+The script exits with return code 0 on success, 1 on failure.
+
+
+-----THE INFO BELOW IS RELEVANT ONLY IF YOU USE VIRTUALBOX-------
+
+My main OS is Linux. I use VirtualBox to test on Windows and OSX. Here is how I make the pagesigner dir from Linux available to the guest OS in VirtualBox:
+
+For Windows guest OS:
+	simply use VB's Shared Folders. Then in Windows Explorer select Map Network Drive and map the shared folder to a drive letter e.g. Z:\
+	
+For OSX guest OS:
+
+(note that OSX has issues communicating with Linux's Samba server, so I used AFP protocol)
+- in Linux sudo apt-get install nettalk
+- in VB add a new network adapter in Bridged Mode 
+- in OSX System Preferences-Network manually assign IP that is in the same subnet as your Linux's IP
+i.e. if your bridged adapter's IP in Linux is 10.0.11.12, then in OSX choose 10.0.11.33 (mask 255.255.255.0)
+- in OSX Finder->Go->Connect to Server enter afp://10.0.11.12 followed when prompted by Linux user's password
+- in Terminal your mounted share will be available in /Volumes/Home Directory/
