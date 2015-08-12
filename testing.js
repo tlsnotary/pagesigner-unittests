@@ -8,7 +8,37 @@ var testing_oracle =
 	'modulus':['will be read from file']
 }
 }
+var verdictport;
 
+function test_verifychain(){
+	var rootCAder;
+	var badsignormalder;
+	return import_resource(['testing', 'unknown_rootCA.certder'])
+	.then(function(dercert){
+		if (verifyCertChain([dercert])){
+			Promise.reject('unknown CA verified');
+		}
+		console.log('unknown CA test passed');
+		return import_resource(['testing', 'rootCA.certder'])
+	})
+	.then(function(der){
+		rootCAder = der;
+		return import_resource(['testing', 'normal_badsig.certder'])
+	})
+	.then(function(der){
+		badsignormalder = der;
+		if (verifyCertChain([badsignormalder, rootCAder])){
+			Promise.reject('bad signature verified');
+		}
+		console.log('bad signature test passed');
+	})
+	.catch(function(err){
+		console.log('caught error', err);
+		var xhr = get_xhr();
+		xhr.open('HEAD', 'http://127.0.0.1:'+ verdictport +'/TEST_FAILED', true);
+		xhr.send();	
+	})
+}
 
 function init_testing(){
 	
@@ -18,7 +48,6 @@ function init_testing(){
 	var rawstr;
 	var dirname;
 	var testpage_html;
-	var verdictport;
 	
 	return new Promise(function(resolve, reject) {
 		if (is_chrome){
@@ -53,6 +82,7 @@ function init_testing(){
 	})
 	.then(function(){
 		testing = true; //makes startNotarizing call a callback when done
+		setTimeout(test_verifychain, 0);
 		return import_resource(['testing', 'reliable_site_pubkey.txt']);
 	})
 	.then(function(text_ba){

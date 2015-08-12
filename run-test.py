@@ -8,6 +8,7 @@ import time
 import os
 import sys
 import platform
+import random
 
 OS = platform.system()
 shared_memory = '/dev/shm'
@@ -120,7 +121,22 @@ def find_executables():
                     
             
         
-    
+def output2hexbytelist(output, starttoken, finishtoken):
+    lines = output.decode().split('\n')
+    start = None
+    finish = None
+    for i, line in enumerate(lines):
+        x = line.strip() #remove leading spaces
+        if x.startswith(starttoken):
+            start = i+1
+        elif x.startswith(finishtoken):
+            finish = i
+            break
+    if (not start) or (not finish):
+        raise Exception('Could not parse OpenSSL output')
+    modulus_string = ''.join(lines[start:finish])
+    hex_bytes_list = modulus_string.replace(' ','').split(':')[1:] 
+    return hex_bytes_list
 
 
 if __name__ == "__main__":
@@ -162,6 +178,7 @@ if __name__ == "__main__":
             subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(certs_dir, 'rootCA.priv'), '4096'])
             #create self-signed root CA cert
             subprocess.call([openssl_path, 'req', '-x509', '-new', '-nodes', '-subj',  '/CN=TLSNOTARY', '-key', os.path.join(certs_dir, 'rootCA.priv'), '-days', '1024', '-out', os.path.join(certs_dir, 'rootCA.cert')])
+            subprocess.call([openssl_path, 'x509', '-outform', 'der', '-in', os.path.join(certs_dir, 'rootCA.cert'), '-out', os.path.join(certs_dir, 'rootCA.certder')])
             #create normal cert privkey
             print('generating server cert')
             subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(certs_dir, 'normal.priv'), '2048'])
@@ -169,6 +186,7 @@ if __name__ == "__main__":
             subprocess.call([openssl_path, 'req', '-new', '-subj', '/CN=127.0.0.1', '-key', os.path.join(certs_dir, 'normal.priv'), '-out', os.path.join(certs_dir, 'normal.csr')])
             #sign the CSR
             subprocess.call([openssl_path, 'x509', '-req', '-in', os.path.join(certs_dir, 'normal.csr'), '-CA', os.path.join(certs_dir, 'rootCA.cert'), '-CAkey', os.path.join(certs_dir, 'rootCA.priv'), '-CAcreateserial', '-out', os.path.join(certs_dir, 'normal.cert'), '-days', '1024'])
+            subprocess.call([openssl_path, 'x509', '-outform', 'der', '-in', os.path.join(certs_dir, 'normal.cert'), '-out', os.path.join(certs_dir, 'normal.certder')])
             #create reliable site privkey, pubkey, create CSR, sign CSR
             print('generating reliable site cert')
             subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(certs_dir, 'reliable.priv'), '2048'])
@@ -197,23 +215,7 @@ if __name__ == "__main__":
 
             output = subprocess.check_output([openssl_path, 'rsa', '-pubin', '-inform', 'PEM', '-text', '-noout', '-in', os.path.join(certs_dir, 'reliable.pub')])
 
-            def output2hexbytelist(output):
-                lines = output.decode().split('\n')
-                start = None
-                finish = None
-                for i, x in enumerate(lines):
-                    if x.startswith('Modulus'):
-                        start = i+1
-                    elif x.startswith('Exponent'):
-                        finish = i
-                        break
-                if (not start) or (not finish):
-                    raise Exception('Could not parse OpenSSL output')
-                modulus_string = ''.join(lines[start:finish])
-                hex_bytes_list = modulus_string.replace(' ','').split(':')[1:] 
-                return hex_bytes_list
-
-            hex_bytes_list = output2hexbytelist(output)
+            hex_bytes_list = output2hexbytelist(output, 'Modulus', 'Exponent')
             write_to_file = 'Name=127.0.0.1\nExpires=04/08/2018\nModulus=\n'
             for i, hexbyte in enumerate(hex_bytes_list):
                 write_to_file += hexbyte+' '
@@ -223,10 +225,42 @@ if __name__ == "__main__":
                 f.write(write_to_file.encode())
 
             output = subprocess.check_output([openssl_path, 'rsa', '-pubin', '-inform', 'PEM', '-text', '-noout', '-in', os.path.join(certs_dir, 'signing_server_public.pub')])
-            hex_bytes_list = output2hexbytelist(output)
+            hex_bytes_list = output2hexbytelist(output, 'Modulus', 'Exponent')
             modulus_number_array = ','.join([str(int(hexchar, 16)) for hexchar in hex_bytes_list])
             with open(os.path.join(certs_dir, 'signing_server_pubkey.txt'), 'wb') as f:
                 f.write(modulus_number_array.encode())
+
+        verifychain_dir = os.path.join(unittests_dir, 'verifychain')
+        if not os.path.exists(verifychain_dir):
+            os.mkdir(verifychain_dir)        
+            print('generating unknown root CA cert')
+            subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(verifychain_dir, 'unknown_rootCA.priv'), '4096'])
+            #create self-signed root CA cert
+            subprocess.call([openssl_path, 'req', '-x509', '-new', '-nodes', '-subj',  '/CN=TLSNOTARY_UNKNOWN', '-key', os.path.join(verifychain_dir, 'unknown_rootCA.priv'), '-days', '1024', '-outform', 'der', '-out', os.path.join(verifychain_dir, 'unknown_rootCA.certder')])
+            shutil.copy(os.path.join(verifychain_dir, 'unknown_rootCA.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'unknown_rootCA.certder'))
+            #in order to corrupt the sig, we must know what the sig is
+            #no_signame because otherwise the starttoken is printed twice
+            output = subprocess.check_output([openssl_path, 'x509', '-text', '-certopt', 'no_signame', '-in', os.path.join(certs_dir, 'normal.cert')])
+            hexbytelist = output2hexbytelist(output, 'Signature Algorithm', '-----BEGIN CERTIFICATE')
+            sigbytes = bytes()
+            for hexstr in hexbytelist:
+                sigbytes += (int(hexstr, 16)).to_bytes(1, byteorder='big')
+            with open(os.path.join(certs_dir, 'normal.certder'), 'rb') as f:
+                normalcertder = f.read()
+            sigstart = normalcertder.find(sigbytes)
+            if sigstart == -1:
+                raise Exception('cannot find sig in cert')
+            bad_byte_pos = random.randint(0, len(sigbytes)-1)
+            #make a byte corrupted by adding 1 mod 255 to it
+            normalcert_with_badsig = \
+                normalcertder[:sigstart+bad_byte_pos] + \
+                ((normalcertder[sigstart+bad_byte_pos] + 1) % 255).to_bytes(1, byteorder='big') + \
+                normalcertder[sigstart+bad_byte_pos+1:]
+            with open(os.path.join(verifychain_dir, 'normal_badsig.certder'), 'wb') as f:
+                f.write(normalcert_with_badsig)
+            shutil.copy(os.path.join(unittests_dir, 'certs', 'rootCA.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'rootCA.certder'))
+            shutil.copy(os.path.join(verifychain_dir, 'normal_badsig.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'normal_badsig.certder'))
+           
 
         threading.Thread(target=server_thread, daemon=True).start()
         threading.Thread(target=reliable_site_thread, daemon=True).start()
