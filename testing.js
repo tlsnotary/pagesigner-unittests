@@ -101,9 +101,7 @@ function init_testing(){
 		return import_resource(['testing', 'rootCA.cert']);
 	})
 	.then(function(text_ba){
-		if (is_chrome){ //remove this condition when we start using bitpay store on FF
-			certs['CN=TLSNOTARY/'] = ba2str(text_ba);
-		}
+		certs['CN=TLSNOTARY/'] = ba2str(text_ba);
 		//add a notary+signing server pubkey
 		oracles_intact = true;
 		chosen_notary = testing_oracle;
