@@ -34,10 +34,55 @@ function test_verifychain(){
 	})
 	.catch(function(err){
 		console.log('caught error', err);
-		var xhr = get_xhr();
-		xhr.open('HEAD', 'http://127.0.0.1:'+ verdictport +'/TEST_FAILED', true);
-		xhr.send();	
+		test_failed();
 	})
+}
+
+
+function test_reliable_site_pubkey(){
+	return new Promise(function(resolve, reject) {
+
+	//corrupt one byte of reliable site modulus and make sure preparing PMS fails
+	var correct_modulus = reliable_sites[0]['modulus'];
+	var bad_byte_pos = Math.random()*(correct_modulus.length) << 0;
+	var bad_byte = (correct_modulus[bad_byte_pos] + 1) % 255;
+	var corrupted_modulus = [].concat(
+		correct_modulus.slice(0, bad_byte_pos), bad_byte, correct_modulus.slice(bad_byte_pos+1));
+	reliable_sites[0]['modulus'] = corrupted_modulus;
+	var random_site_modulus = []; //this is not used in prepare_pms, any random value will do
+	for (var i=0; i < 256; i++) {
+		random_site_modulus.push(Math.round(Math.random() * 255));
+	}
+	//just one or two failures may also mean incorrect padding
+	//we need to be sure that it is not padding but the flipped byte, hence 10 tries
+	//copied from main.js with tweaks
+	random_uid = Math.random().toString(36).slice(-10);
+	var tries = 0;
+	var loop = function(){
+		tries += 1;
+		prepare_pms(random_site_modulus)
+		.then(function(args){
+			//we get here when there was no error and prepare_pms didnt throw
+			reject('Testing incorrect reliable site pubkey FAILED');
+		})
+		.catch(function(error){
+			if (error != 'PMS trial failed'){
+				reject('in prepare_pms: caught error ' + error);
+				return;
+			}
+			if (tries == 10){
+				reliable_sites[0]['modulus'] = correct_modulus;
+				resolve('Could not prepare PMS after 10 tries');
+				console.log('Incorrect reliable site pubkey test PASSED');
+				return;
+			}
+			//else PMS trial failed
+			loop();
+		});
+	};
+	loop(resolve, reject);
+		
+	});
 }
 
 function init_testing(){
@@ -89,6 +134,8 @@ function init_testing(){
 		reliable_sites = [];
 		parse_reliable_sites(ba2str(text_ba));
 		reliable_sites[0]['port'] = 5443;
+	})
+	.then(function(){
 		return import_resource(['testing', 'signing_server_pubkey.txt']);
 	})
 	.then(function(text_ba){
@@ -105,6 +152,9 @@ function init_testing(){
 		//add a notary+signing server pubkey
 		oracles_intact = true;
 		chosen_notary = testing_oracle;
+		return test_reliable_site_pubkey();
+	})
+	.then(function(){
 		//automatically opentab and notarize it
 		return new Promise(function(resolve, reject) {
 			if (is_chrome){
@@ -235,13 +285,16 @@ function init_testing(){
 		if (what === 'not testing'){
 			return;
 		}
-		var xhr = get_xhr();
-		xhr.open('HEAD', 'http://127.0.0.1:'+ verdictport +'/TEST_FAILED', true);
-		xhr.send();	
+		test_failed();
 		alert(what);
 	});
 }
 
+function test_failed(){
+	var xhr = get_xhr();
+	xhr.open('HEAD', 'http://127.0.0.1:'+ verdictport +'/TEST_FAILED', true);
+	xhr.send();	
+}
 
 setTimeout(init_testing, 5000);
 
