@@ -28,6 +28,7 @@ chrome_path = None
 openssl_path = None
 python3_path = None
 keepopen = None #if True dont close browsers after the test successfully finished
+chromeonly = None #if True dont launch firefox
 
 class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -152,6 +153,8 @@ if __name__ == "__main__":
                 python3_path = arg.split('=')[1]
             if arg == 'keepopen':
                 keepopen = True
+            if arg == 'chromeonly':
+                chromeonly = True
 
 
         find_executables()
@@ -293,40 +296,43 @@ if __name__ == "__main__":
         print('Starting Chrome')
         chromeproc = subprocess.Popen([chrome_path, 'http://127.0.0.1:0/pagesigner_testing_on_chrome', '--profile-directory=PageSigner', '--load-extension='+pagesigner_dir, '--allow-insecure-localhost'])
 
-        if OS == 'Linux':
-            suffix = 'firefox-linux'
-        elif OS == 'Windows':
-            suffix = 'firefox-win'
-        elif OS == 'Darwin':
-            suffix = 'firefox-mac'
-        firefox_profile_dir = os.path.join(unittests_dir, suffix)
-        if not os.path.exists(firefox_profile_dir):
-            os.mkdir(firefox_profile_dir)
-            #if we put the extension in an empty profile fir, FF will ignore it
-            #so we start FF allowing it  to create the skeleton profile and then terminate it
-            ffprobeproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
-            #give FF ample time to initialize otherwise it will ignore the extensions dir
-            time.sleep(5)
-            ffprobeproc.terminate()
-        profile_extension_dir = os.path.join(firefox_profile_dir, 'extensions')
-        if not os.path.exists(profile_extension_dir):
-            os.mkdir(profile_extension_dir)
-            with open(os.path.join(profile_extension_dir, 'pagesigner@tlsnotary'), 'wb') as f:
-                f.write(pagesigner_dir.encode())
-        os.putenv('PAGESIGNER_TESTING_ON_FIREFOX', 'true')
-        print('Starting Firefox')
-        ffproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
+        if not chromeonly:
+            if OS == 'Linux':
+                suffix = 'firefox-linux'
+            elif OS == 'Windows':
+                suffix = 'firefox-win'
+            elif OS == 'Darwin':
+                suffix = 'firefox-mac'
+            firefox_profile_dir = os.path.join(unittests_dir, suffix)
+            if not os.path.exists(firefox_profile_dir):
+                os.mkdir(firefox_profile_dir)
+                #if we put the extension in an empty profile fir, FF will ignore it
+                #so we start FF allowing it  to create the skeleton profile and then terminate it
+                ffprobeproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
+                #give FF ample time to initialize otherwise it will ignore the extensions dir
+                time.sleep(5)
+                ffprobeproc.terminate()
+            profile_extension_dir = os.path.join(firefox_profile_dir, 'extensions')
+            if not os.path.exists(profile_extension_dir):
+                os.mkdir(profile_extension_dir)
+                with open(os.path.join(profile_extension_dir, 'pagesigner@tlsnotary'), 'wb') as f:
+                    f.write(pagesigner_dir.encode())
+            os.putenv('PAGESIGNER_TESTING_ON_FIREFOX', 'true')
+            print('Starting Firefox')
+            ffproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
     
         #LIsten for a sign from the backend that test passed/failed
         chromevt = ThreadWithRetval(target=testing_verdict_thread, args=(11557,))
         chromevt.daemon = True
         chromevt.start()
-        ffvt = ThreadWithRetval(target=testing_verdict_thread, args=(11558,))
-        ffvt.daemon = True
-        ffvt.start()
+        if not chromeonly:
+            ffvt = ThreadWithRetval(target=testing_verdict_thread, args=(11558,))
+            ffvt.daemon = True
+            ffvt.start()
         chromevt.join()
-        ffvt.join()
-        if (chromevt.retval == 0 and ffvt.retval == 0):
+        if not chromeonly:
+            ffvt.join()
+        if (chromevt.retval == 0 and (ffvt.retval == 0 if not chromeonly else True)):
             cleanup_and_quit('test passed')
         else:
             print('Not exiting because there was an error')
