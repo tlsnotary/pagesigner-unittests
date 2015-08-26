@@ -9,37 +9,81 @@ var testing_oracle =
 }
 }
 var verdictport;
+var manager_tabID;
+var view_tabID;
+var viewRawDocument;
+
+setTimeout(function(){
+	//when this file is injected as content script in Chrome we must not run it
+	if (typeof(is_chrome) === 'undefined'){
+		return;
+	}
+	else {
+		init_testing();
+	}
+}, 2000);
 
 
-function open_tab_and_wait_until_loaded(url_to_open){
-	//automatically opentab and notarize it
+function openURL(url){
+	if (is_chrome){
+		chrome.tabs.create({url:url});
+	}
+	else {
+		gBrowser.selectedTab = gBrowser.addTab(url);
+	}
+}
+
+
+function wait_until_url_loaded(args){
+	var url = args.url;
+	var match_ending = (typeof args.match_ending !== 'undefined');
+	var notarizing = (typeof args.notarizing !== 'undefined');
+	
 	return new Promise(function(resolve, reject) {
-		if (is_chrome){
-			chrome.tabs.create({url:url_to_open}, function(t){
-				
-				var interval;
-				var check_if_loaded = function(){
-					chrome.tabs.query({active: true}, function(t){
-						if (t[0].url === url_to_open && tabs.hasOwnProperty(t[0].id)){
-							clearInterval(interval);
-							resolve();
-						}
-					});
-				};
-				interval = setInterval(check_if_loaded, 1000);
-				
-			});
+		if (is_chrome){	
+			var check_if_loaded = function(url){
+				chrome.tabs.query({active: true}, function(t){
+					var is_url_matched = false;
+					if (match_ending){
+						is_url_matched = t[0].url.endsWith(url);
+					}
+					else {
+						is_url_matched = (t[0].url === url); 
+					}
+					//urls that we will notarize must be "loaded"
+					//ie placed by a listener into the var tabs
+					if (is_url_matched && (notarizing ? tabs.hasOwnProperty(t[0].id) : true)){
+						resolve();
+					}
+					else {
+						console.log('url not yet loaded, waiting');
+						setTimeout(function(){check_if_loaded(url);}, 100);
+					}
+				});
+			};
+			check_if_loaded(url);
 		}
 		else {
-			gBrowser.selectedTab = gBrowser.addTab(url_to_open);
-			var interval;
-			var check_if_loaded = function(){
-				if (gBrowser.selectedBrowser.contentWindow.location.href === url_to_open){
-					clearInterval(interval);
+			var check_if_loaded = function(url){
+				var href = gBrowser.selectedBrowser.contentWindow.location.href;
+				var is_url_matched = false;
+				if (match_ending){
+					is_url_matched = href.endsWith(url);
+				}
+				else {
+					is_url_matched = (href === url); 
+				}
+					
+				if (is_url_matched){
+					console.log('url matched, resolving');
 					resolve();
 				}
+				else {
+					console.log('url not yet loaded, waiting');
+					setTimeout(function(){check_if_loaded(url);}, 500);
+				}
 			};
-			interval = setInterval(check_if_loaded, 1000);
+			check_if_loaded(url);
 		}
 	});
 }
@@ -120,6 +164,29 @@ function test_reliable_site_pubkey(){
 	});
 }
 
+
+function executeScript(code, argTabID){
+	return new Promise(function(resolve, reject) {
+		if (! is_chrome){
+			var retval = eval(code);
+			resolve(retval);
+		}
+		else {
+			var tabID = manager_tabID;
+			if (typeof(argTabID) !== 'undefined'){
+				tabID = argTabID;
+			}
+			chrome.tabs.executeScript(tabID, {code:code},
+			function(result){
+				resolve(result[0]);
+			});
+			
+		}
+	});
+	
+}
+
+
 function init_testing(){
 	
 	console.log('in init_testing');
@@ -128,7 +195,6 @@ function init_testing(){
 	var rawstr;
 	var dirname;
 	var testpage_html;
-	var manager_tabID;
 	var new_random_name = Math.random().toString(36).slice(-10);
 	
 	return new Promise(function(resolve, reject) {
@@ -193,7 +259,8 @@ function init_testing(){
 	})
 	.then(function(){
 		//automatically opentab and notarize it
-		return open_tab_and_wait_until_loaded(test_url);
+		openURL(test_url);
+		return wait_until_url_loaded({url:test_url, notarizing:true});
 	})
 	.then(function(){
 		return new Promise(function(resolve, reject) {
@@ -287,54 +354,42 @@ function init_testing(){
 		};
 		//wait for the notarized page to pop up before we proceed
 		//otherwise the delayed opened tab may steal focus from manager tab
-		return new Promise(function(resolve, reject) {
-		
-			var check_if_loaded = function(){
-				chrome.tabs.query({active: true}, function(t){
-					if (t[0].url.endsWith('data.html')){
-						resolve();
-					}
-					else {
-						console.log('notarized tab is not yet open, retrying');
-						setTimeout(function(){check_if_loaded();}, 100);
-					}
-				});
-			};
-			check_if_loaded();
-		});
+		return wait_until_url_loaded({url:'data.html', match_ending:true});
 	})
 	.then(function(){
-		//This is what menu does to open manager.
-		//in Chrome we cannot access the menu to click() on it. This is the next best thing.
-		chrome.runtime.sendMessage({'destination':'extension',
-									'message':'manage'});
-									
-		return new Promise(function(resolve, reject) {
-			var wait_for_tab_to_open = function(url_we_wait_for){
-				chrome.tabs.query({active:true}, function(tabs){
-					if (tabs[0].url !== url_we_wait_for){
-						console.log('tab not yet loaded, retrying');
-						setTimeout(function(){wait_for_tab_to_open(url_we_wait_for);}, 100);
-					}
-					else {
-						manager_tabID = tabs[0].id;
-						resolve();
-					}
-				});
-			};	
-			wait_for_tab_to_open(manager_path);
-		});
+		console.log('opening manager and waiting for it to load');
+		if (is_chrome){
+			//This is what menu does to open manager.
+			//in Chrome we cannot access the menu to click() on it. This is the next best thing.
+			chrome.runtime.sendMessage({'destination':'extension',
+										'message':'manage'});
+		}
+		else {
+			main.manage();
+		}
+		return wait_until_url_loaded({url:manager_path});						
 	})
 	.then(function(){
-		//wait for content script to be injected
+		console.log('chrome: getting manager tab ID');
+		if (is_chrome){
+			//get the manager tab ID
+			chrome.tabs.query({active:true}, function(tabs){
+				manager_tabID = tabs[0].id;
+				return Promise.resolve();
+			});
+		}
+		else {
+			return Promise.resolve();
+		}
+	})
+	.then(function(){
 		return new Promise(function(resolve, reject) {
-			var wait_for_content_script = function(){
-				chrome.tabs.executeScript(manager_tabID, {code:
-					'content_script_loaded;'},
-					function(result){
-						//this is the value of the last line of injected script
-						//which in our case is content_script_loaded
-						if (result[0] !== true){
+			if (is_chrome){
+				//wait for content script to be injected
+				var wait_for_content_script = function(){
+					executeScript('document.getElementById("content_script_injected_into_page").textContent')
+					.then(function(result){
+						if (result !== 'true'){
 							console.log('content script not yet loaded, retrying');
 							setTimeout(function(){wait_for_content_script();}, 100);
 						}
@@ -342,18 +397,35 @@ function init_testing(){
 							resolve();
 						}
 					});
-			};
-			wait_for_content_script();
+				};
+				wait_for_content_script();
+			}
+			else {
+				resolve();
+			}
 		});
 	})
 	.then(function(){
-		//wait for table_populated to be set to true
+		return new Promise(function(resolve, reject) {	
+			if (is_chrome){
+				chrome.tabs.executeScript(manager_tabID, 
+					{file:'content/testing/manager_test.js'},
+					function(){
+						resolve();
+					});
+			}
+			else {
+				resolve();
+			}
+		});
+	})
+	.then(function(){
+		console.log('wait for table_populated to be set to true');
 		return new Promise(function(resolve, reject) {
 			var wait_for_variable = function(){
-				chrome.tabs.executeScript(manager_tabID,
-				{code:'check_table_populated();'},
-				function(result){
-					if (result[0] !== true){
+				executeScript('check_table_populated()')
+				.then(function(result){
+					if (result !== true){
 						console.log('table is not yet populated, retrying');
 						setTimeout(function(){wait_for_variable();}, 100);
 					}
@@ -366,45 +438,31 @@ function init_testing(){
 		});
 	})
 	.then(function(){
+		console.log('finding entry in table');
 		return new Promise(function(resolve, reject) {
-			chrome.tabs.executeScript(manager_tabID, 
-				{file:'content/testing/findDirnameInTable.js'},
-				function(){
-					resolve();
-				});
-		});
-	})
-	.then(function(){
-		var parts = dirname.split('-');
-		var partbefore = parts.slice(0, -1);
-		var partafter = parts.slice(-1);
-		var text_to_find = [partbefore.join('-'), partafter].join(' , ');
+			var parts = dirname.split('-');
+			var partbefore = parts.slice(0, -1);
+			var partafter = parts.slice(-1);
+			var text_to_find = [partbefore.join('-'), partafter].join(' , ');
 		
-		return new Promise(function(resolve, reject) {
-
-			chrome.tabs.executeScript(manager_tabID,
-				{code:'findDirnameInTable("' + text_to_find + '");'},
-				function(result){	
-					console.log('result was', result);
-					if (result[0] === true){
-						resolve();
-					}
-					else {
-						reject('could not find entry in the table');
-					}
+			executeScript('findDirnameInTable("' + text_to_find + '");')
+			.then(function(result){
+				if (result === true){
+					resolve();
 				}
-			);
-			
+				else {
+					reject('could not find entry in the table');
+				}
+			});
 		});
 	})
 	.then(function(){
-		//rename
+		console.log('renaming table entry');
 		return new Promise(function(resolve, reject) {
 			var rename = function(newname){
-				chrome.tabs.executeScript(manager_tabID,
-				{code:'renameEntry("' + newname + '");'},
-				function(result){
-					if (result[0] !== true){
+				executeScript('renameEntry("' + newname + '");')
+				.then(function(result){
+					if (result !== true){
 						console.log('rename dialog is not yet ready, retrying');
 						setTimeout(function(){rename(newname);}, 100);
 					}
@@ -417,13 +475,12 @@ function init_testing(){
 		});		
 	})
 	.then(function(){
-		//wait for the table to repopulate
+		console.log('waiting for the table to repopulate');
 		return new Promise(function(resolve, reject) {
 			var wait_for_repopulate = function(){
-				chrome.tabs.executeScript(manager_tabID,
-				{code:'wait_for_repopulate();'},
-				function(result){
-					if (result[0] !== true){
+				executeScript('wait_for_repopulate();')
+				.then(function(result){
+					if (result !== true){
 						console.log('the table hasnt yet repopulated, retrying');
 						setTimeout(function(){wait_for_repopulate();}, 100);
 					}
@@ -439,10 +496,9 @@ function init_testing(){
 		
 		return new Promise(function(resolve, reject) {
 			var findNewName = function(newname){
-				chrome.tabs.executeScript(manager_tabID,
-				{code:'findNewName("' + newname + '");'},
-				function(result){
-					if (result[0] !== true){
+				executeScript('findNewName("' + newname + '");')
+				.then(function(result){
+					if (result !== true){
 						console.log('findNewName returned false, retrying');
 						setTimeout(function(){findNewName(newname);}, 100);
 					}
@@ -465,10 +521,9 @@ function init_testing(){
 		};
 		//export the file
 		return new Promise(function(resolve, reject) {
-			chrome.tabs.executeScript(manager_tabID,
-				{code:'exportFile("' + new_random_name + '");'},
-				function(result){	
-					if (result[0] === true){
+			executeScript('exportFile("' + new_random_name + '");')
+				.then(function(result){	
+					if (result === true){
 						resolve();
 					}
 					else {
@@ -483,10 +538,9 @@ function init_testing(){
 		//export the file
 		return new Promise(function(resolve, reject) {
 			var dismissExportWarning = function(){
-				chrome.tabs.executeScript(manager_tabID,
-					{code:'dismissExportWarning();'},
-					function(result){	
-						if (result[0] === true){
+				executeScript('dismissExportWarning();')
+					.then(function(result){	
+						if (result === true){
 							resolve();
 						}
 						else {
@@ -502,28 +556,43 @@ function init_testing(){
 	.then(function(){
 		//check that the file was exported 
 		return new Promise(function(resolve, reject) {
-			var check_downloads = function(){
-				chrome.downloads.search({filenameRegex:'.*'+new_random_name+'.*'}, function(results){
-					if (results.length !== 1){
-						console.log('file not yet exported, retrying');
-						setTimeout(function(){check_downloads()}, 100);
-					}
-					else{
+			if (is_chrome){
+				var check_downloads = function(){
+					chrome.downloads.search({filenameRegex:'.*'+new_random_name+'.*'}, function(results){
+						if (results.length !== 1){
+							console.log('file not yet exported, retrying');
+							setTimeout(function(){check_downloads()}, 100);
+						}
+						else{
+							resolve();
+						}
+					});
+				};
+				check_downloads();
+			}  	
+			else {
+				//TODO create tmp.dir
+				var dldir = Cc["@mozilla.org/file/directory_service;1"].
+				   getService(Ci.nsIProperties).get("DfltDwnld", Ci.nsIFile).path;
+				var dst = OS.Path.join(dldir, 'pagesigner.tmp.dir', new_random_name); 
+				function check_if_exists(path){
+					if (OS.File.exists(path)){
 						resolve();
 					}
-				});
-			};
-			check_downloads();
+					else {
+						console.log('export file does not exists yet, retrying');
+						setTimeout(function(){check_if_exists(path)}, 100);
+					}
+				};
+				check_if_exists(dst);
+			}
 		});
 	})
-	.then(function(){
-		
-		//click View
+	.then(function(){		
 		return new Promise(function(resolve, reject) {
-			chrome.tabs.executeScript(manager_tabID,
-				{code:'clickView("' + new_random_name + '");'},
-				function(result){	
-					if (result[0] === true){
+			executeScript('clickView("' + new_random_name + '");')
+				.then(function(result){	
+					if (result === true){
 						resolve();
 					}
 					else {
@@ -535,88 +604,204 @@ function init_testing(){
 	})
 	.then(function(){
 		//wait for the view tab to become active
+		return wait_until_url_loaded({url:'data.html', match_ending:true});
+		//TODO match URL against *pagesigner.tmp.dir*data.html regex
+	})
+	.then(function(){
+		//get the id of viewTab so we can inject scripts on Chrome
 		return new Promise(function(resolve, reject) {
-			var wait_for_view_tab = function(){
-				chrome.tabs.query({active:true, url:'file:///*pagesigner.tmp.dir*data.html'}, function(tabs){
-					if (tabs.length !== 1){
-						console.log('tab not yet loaded, retrying');
-						setTimeout(function(){wait_for_view_tab();}, 100);
-					}
-					else {
-						resolve(tabs[0].id);
-					}
+			if (is_chrome){
+				chrome.tabs.query({active: true}, function(t){
+					view_tabID = t[0].id;
+					resolve();
 				});
-			};	
-			wait_for_view_tab();
+			}
+			else {
+				resolve();
+			}
 		});
 	})
-	.then(function(tabid){
+	.then(function(){
+		//prepare the viewRawDocument var
+		return new Promise(function(resolve, reject) {
+			if (is_chrome){
+				executeScript('var viewRawDocument = document', view_tabID)
+				.then(function(){
+					resolve();
+				})
+			}
+			else {
+				viewRawDocument = gBrowser.getBrowserForTab(gBrowser.selectedTab).contentWindow.document;
+				resolve();
+			}
+		});
+	})
+	.then(function(){
 		//sanity check that the page is ours
 		return new Promise(function(resolve, reject) {
-			chrome.tabs.executeScript(tabid,
-				{code:'document.getElementsByTagName("title")[0].textContent'},
-				function(result){
-					if (result[0] === 'PageSigner test page'){
-						resolve(tabid);
-					}
-					else {
-						reject('wrong page opened in View');
-					}
+			executeScript('viewRawDocument.getElementsByTagName("title")[0].textContent', view_tabID)
+			.then(function(result){
+				if (result === 'PageSigner test page'){
+					resolve();
 				}
-			);
+				else {
+					reject('wrong page opened in View');
+				}
+			});
 		});
 	})
-	.then(function(tabid){
+	.then(function(){
 		//wait for the notification tab to be injected
 		return new Promise(function(resolve, reject) {
+			var script = is_chrome ? 'viewRawDocument.getElementById("viewRaw")' :
+				'gBrowser.getNotificationBox().currentNotification';
 			var wait_for_view_raw = function(){
-				chrome.tabs.executeScript(tabid,
-					{code:'document.getElementById("viewRaw")'},
-					function(result){
-						if (result[0] === null){
-							console.log('notification not yet injected, retrying');
-							setTimeout(function(){wait_for_view_raw();}, 100);
-						}
-						else {
-							resolve()
-						}
+				executeScript(script, view_tabID)
+				.then(function(result){
+					if (result === null){
+						console.log('notification not yet injected, retrying');
+						setTimeout(function(){wait_for_view_raw();}, 100);
 					}
-				);
+					else {
+						resolve()
+					}
+				});
 			};
 			wait_for_view_raw();
 		});
 	})
-	.then(function(tabid){
-		//press the view raw button
+	.then(function(){
+		console.log('pressing view raw button');
 		return new Promise(function(resolve, reject) {
-			chrome.tabs.executeScript(tabid,
-				{code:'document.getElementById("viewRaw").click()'},
-				function(result){
-					resolve();
-				}
-			);
+			var script = is_chrome ? 'viewRawDocument.getElementById("viewRaw").click()' :
+				'gBrowser.getNotificationBox().currentNotification.children[0].click()';
+			executeScript(script, view_tabID)
+			.then(function(result){
+				resolve();
+			});
 		});
 	})
 	.then(function(){
-		
+		console.log('waiting view raw tab to appear');
+		var url = is_chrome ? 
+			'filesystem:chrome-extension://' + chrome.runtime.id + '/persistent/' + dirname + '/raw.txt' :
+			OS.Path.toFileURI(OS.Path.join(fsRootPath, dirname, 'raw.txt'));
+		return wait_until_url_loaded({url:url});
+	})
+	.then(function(){
+		console.log('closing view raw tab');
+		//close this tab just in case to prevent confusion
+		//because in the next test we'll open a tab with the same URL
 		return new Promise(function(resolve, reject) {
-			var expected_url = 'filesystem:chrome-extension://' + chrome.runtime.id + '/persistent/' + dirname + '/raw.txt';
-			var wait_for_expected_url = function(url){
-				chrome.tabs.query({active:true}, 
-				function(tabs){
-					if (tabs[0].url !== url){
-						console.log('raw tab not yet loaded, retrying');
-						setTimeout(function(){wait_for_expected_url(url);}, 100);
+			if (is_chrome){
+				chrome.tabs.query({active:true}, function(t){
+					chrome.tabs.remove(t[0].id, function(){
+						resolve();
+					});
+				});
+			}
+			else {
+				gBrowser.removeCurrentTab();
+				resolve();
+			}
+		});
+	})
+	.then(function(){
+		console.log('clicking raw from the manager');
+		return new Promise(function(resolve, reject) {
+			executeScript('clickRaw("' + new_random_name + '");')
+			.then(function(result){	
+				if (result === true){
+					resolve();
+				}
+				else {
+					reject('error while clicking raw');
+				}
+			});
+		});	
+	})
+	.then(function(){
+		console.log('waiting for raw tab to open');
+		var url = is_chrome ? 
+			'filesystem:chrome-extension://' + chrome.runtime.id + '/persistent/' + dirname + '/raw.txt' :
+			OS.Path.toFileURI(OS.Path.join(fsRootPath, dirname, 'raw.txt'));
+		return wait_until_url_loaded({url:url});
+	})
+	.then(function(){
+		console.log('clicking delete from the manager');
+		return new Promise(function(resolve, reject) {
+			executeScript('clickDelete("' + new_random_name + '");')
+			.then(function(result){	
+				if (result === true){
+					resolve();
+				}
+				else {
+					reject('error while clicking delete');
+				}
+			});
+		});	
+	})
+	.then(function(){
+	console.log('waiting for delete confirmation dialog and pressing OK');
+		return new Promise(function(resolve, reject) {
+			var confirmDelete = function(){
+				executeScript('confirmDelete();')
+				.then(function(result){	
+					if (result === true){
+						resolve();
+					}
+					else {
+						console.log('delete confirmation hasnt shown yet, retrying');
+						setTimeout(function(){confirmDelete();}, 100);
+					}
+				});
+			};
+			confirmDelete();
+		});	
+	})
+	.then(function(){
+		console.log('waiting for table to repopulate');
+		return new Promise(function(resolve, reject) {
+			var wait_for_repopulate = function(){
+				executeScript('wait_for_repopulate();')
+				.then(function(result){
+					if (result !== true){
+						console.log('the table hasnt yet repopulated, retrying');
+						setTimeout(function(){wait_for_repopulate();}, 100);
 					}
 					else {
 						resolve();
 					}
-				});	
+				});
 			};
-			wait_for_expected_url(expected_url);
+			wait_for_repopulate();
+		});			
+	})
+	.then(function(){
+		console.log('making sure the entry is not in the table anymore');
+		return new Promise(function(resolve, reject) {
+			executeScript('checkThatEntryIsGone("' + new_random_name + '");')
+			.then(function(result){	
+				if (result === true){
+					resolve();
+				}
+				else {
+					reject('error: the entry was still present in the table');
+				}
+			});
+		});	
+	})
+	.then(function(){
+		//check that the dir is no more on disk
+		getDirEntry(new_random_name)
+		.then(function(){
+			//no error
+			Promise.reject('dir still exists');
+		})
+		.catch(function(what){
+			Promise.resolve()
 		});
 	})
-
 	.then(function(){
 		test_passed();
 	})
@@ -643,7 +828,6 @@ function test_failed(){
 	xhr.send();	
 }
 
-setTimeout(init_testing, 2000);
 
 function findDiff(str1, str2){
 	for(var i=0; i < str1.length; i++){

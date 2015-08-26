@@ -284,6 +284,7 @@ if __name__ == "__main__":
         signingproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'signing_server', 'signing_server.py'), 'shared_memory='+shared_memory, 'openssl_path='+openssl_path])
         
         shutil.copy(os.path.join(unittests_dir, 'testing.js'), os.path.join(pagesigner_dir, 'content', 'testing', 'testing.js'))
+        shutil.copy(os.path.join(unittests_dir, 'manager_test.js'), os.path.join(pagesigner_dir, 'content', 'testing', 'manager_test.js'))
         shutil.copy(os.path.join(unittests_dir, 'testpage.html'), os.path.join(pagesigner_dir, 'content', 'testing', 'testpage.html'))
         shutil.copy(os.path.join(unittests_dir, 'certs', 'reliable_site_pubkey.txt'), 
                     os.path.join(pagesigner_dir, 'content', 'testing', 'reliable_site_pubkey.txt'))
