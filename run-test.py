@@ -29,6 +29,8 @@ openssl_path = None
 python3_path = None
 keepopen = None #if True dont close browsers after the test successfully finished
 chromeonly = None #if True dont launch firefox
+firefoxonly = None #if True dont launch Chrome
+
 
 class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -58,6 +60,7 @@ def reliable_site_thread():
 
 def testing_verdict_thread(parentthread, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_address = ('127.0.0.1', port)
     sock.bind(server_address)
     sock.listen(1)
@@ -80,6 +83,7 @@ def cleanup_and_quit(source):
         if proc and not keepopen:
             proc.terminate()
     if source == 'keyboard':
+        print('Exit code 1')
         exit(1)
     elif source == 'test passed':
         print ('All tests PASSED')
@@ -155,6 +159,8 @@ if __name__ == "__main__":
                 keepopen = True
             if arg == 'chromeonly':
                 chromeonly = True
+            if arg == 'firefoxonly':
+                firefoxonly = True
 
 
         find_executables()
@@ -294,8 +300,9 @@ if __name__ == "__main__":
                                    os.path.join(pagesigner_dir, 'content', 'testing', 'rootCA.cert'))
 
         shutil.copy(os.path.join(certs_dir, 'main_server_private.priv'), os.path.join(shared_memory, 'main_server_private.pem'))        
-        print('Starting Chrome')
-        chromeproc = subprocess.Popen([chrome_path, 'http://127.0.0.1:0/pagesigner_testing_on_chrome', '--profile-directory=PageSigner', '--load-extension='+pagesigner_dir, '--allow-insecure-localhost'])
+        if not firefoxonly:
+            print('Starting Chrome')
+            chromeproc = subprocess.Popen([chrome_path, 'http://127.0.0.1:0/pagesigner_testing_on_chrome', '--profile-directory=PageSigner', '--load-extension='+pagesigner_dir, '--allow-insecure-localhost'])
 
         if not chromeonly:
             if OS == 'Linux':
@@ -323,17 +330,19 @@ if __name__ == "__main__":
             ffproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
     
         #LIsten for a sign from the backend that test passed/failed
-        chromevt = ThreadWithRetval(target=testing_verdict_thread, args=(11557,))
-        chromevt.daemon = True
-        chromevt.start()
+        if not firefoxonly:
+            chromevt = ThreadWithRetval(target=testing_verdict_thread, args=(11557,))
+            chromevt.daemon = True
+            chromevt.start()
         if not chromeonly:
             ffvt = ThreadWithRetval(target=testing_verdict_thread, args=(11558,))
             ffvt.daemon = True
             ffvt.start()
-        chromevt.join()
+        if not firefoxonly:
+            chromevt.join()
         if not chromeonly:
             ffvt.join()
-        if (chromevt.retval == 0 and (ffvt.retval == 0 if not chromeonly else True)):
+        if ((chromevt.retval == 0 if not firefoxonly else True)and (ffvt.retval == 0 if not chromeonly else True)):
             cleanup_and_quit('test passed')
         else:
             print('Not exiting because there was an error')

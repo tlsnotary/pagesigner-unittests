@@ -1,8 +1,31 @@
 //This is a content script used only in testing 
 
+function assertEntryImported(dirname){
+	var rows = managerDocument.getElementById('myTableBody').children;
+	for (var i=0; i<rows.length; i++){
+		if (rows[i].children[4].textContent === dirname){
+			if (rows[i].children[5].textContent !== 'imported'){
+				return false;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 function check_table_populated(){
-	var retval = document.getElementById('table_populated').textContent;
-	if (retval === 'true'){
+	if (typeof(managerDocument) === 'undefined'){
+		//This happened sometimes on Windows, a very weird error 
+		//TODO: find out what causes this
+		console.log('document undefined in check_table_populated');
+		return false;
+	}
+	var tp = managerDocument.getElementById('table_populated');
+	if (tp === null){
+		return false;
+	}
+	
+	if (tp.textContent === 'true'){
 		return true;
 	}
 	else {
@@ -10,24 +33,13 @@ function check_table_populated(){
 	}
 }
 
-
-
-function wait_for_repopulate(){
-	if (document.getElementById('table_populated').textContent === 'false'){
-		console.log('the table hasnt yet repopulated, returning false');
-		return false;
-	}
-	else {
-		return true;
-	}
-}
 
 function findDirnameInTable(dirname){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[4].textContent === dirname){
 			//make sure sweetalert is not available yet
-			if (document.getElementsByClassName('sweet-alert').length !== 0){
+			if (managerDocument.getElementsByClassName('sweet-alert').length !== 0){
 				console.log('sweet alert is not supposed to be loaded by now');
 				return false;
 			}
@@ -40,7 +52,7 @@ function findDirnameInTable(dirname){
 
 
 function exportFile(dirname){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === dirname){
 			rows[i].children[2].children[0].click();
@@ -52,7 +64,7 @@ function exportFile(dirname){
 
 
 function dismissExportWarning(){
-	var sa = document.getElementsByClassName('sweet-alert')[0];
+	var sa = managerDocument.getElementsByClassName('sweet-alert')[0];
 	if (sa.getAttribute('class').search('visible') === -1){
 		console.log('sweetalert is not yet visible, retrying');
 		return false;
@@ -61,13 +73,13 @@ function dismissExportWarning(){
 		console.log('we were expecting an export warning dialog');
 		return false;
 	}
-	document.getElementsByClassName('sa-button-container')[0].children[1].click();
+	managerDocument.getElementsByClassName('sa-button-container')[0].children[1].click();
 	return true;
 }
 
 
 function clickView(entryName){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === entryName){
 			rows[i].children[8].children[0].click();
@@ -79,7 +91,7 @@ function clickView(entryName){
 
 
 function clickRaw(entryName){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === entryName){
 			rows[i].children[8].children[2].click();
@@ -91,7 +103,7 @@ function clickRaw(entryName){
 
 
 function clickDelete(entryName){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === entryName){
 			rows[i].children[3].children[0].click();
@@ -103,7 +115,7 @@ function clickDelete(entryName){
 
 
 function confirmDelete(){
-	var sa = document.getElementsByClassName('sweet-alert')[0];
+	var sa = managerDocument.getElementsByClassName('sweet-alert')[0];
 	if (sa.getAttribute('class').search('visible') === -1){
 		console.log('sweetalert is not yet visible, retrying');
 		return false;
@@ -112,14 +124,14 @@ function confirmDelete(){
 		console.log('we were expecting a delete confirmation dialog');
 		return false;
 	}
-	document.getElementById('table_populated').textContent = 'false';
-	document.getElementsByClassName('sa-button-container')[0].children[1].click();
+	managerDocument.getElementById('table_populated').textContent = 'false';
+	managerDocument.getElementsByClassName('sa-button-container')[0].children[1].click();
 	return true;	
 }
 
 
 function checkThatEntryIsGone(entryName){
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === entryName){
 			return false;
@@ -130,7 +142,7 @@ function checkThatEntryIsGone(entryName){
 
 
 function renameEntry(newname){
-	var sa = document.getElementsByClassName('sweet-alert')[0];
+	var sa = managerDocument.getElementsByClassName('sweet-alert')[0];
 	if (sa.getAttribute('class').search('visible') === -1){
 		console.log('sweetalert is not yet visible, retrying');
 		return false;
@@ -140,18 +152,18 @@ function renameEntry(newname){
 		return false;
 	}
 	sa.getElementsByTagName('fieldset')[0].children[0].value = newname;
-	document.getElementById('table_populated').textContent = 'false';
-	document.getElementsByClassName('sa-button-container')[0].children[1].click();
+	managerDocument.getElementById('table_populated').textContent = 'false';
+	managerDocument.getElementsByClassName('sa-button-container')[0].children[1].click();
 	return true;
 }
 
 
 function findNewName(newname){
-	if (document.getElementById('table_populated').textContent !== 'true'){
+	if (managerDocument.getElementById('table_populated').textContent !== 'true'){
 		console.log('table has not yet repopulated, retrying');
 		return false;
 	}
-	var rows = document.getElementById('myTableBody').children;
+	var rows = managerDocument.getElementById('myTableBody').children;
 	for (var i=0; i<rows.length; i++){
 		if (rows[i].children[0].textContent === newname){
 			return true;

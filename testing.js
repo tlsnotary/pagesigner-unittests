@@ -12,25 +12,34 @@ var verdictport;
 var manager_tabID;
 var view_tabID;
 var viewRawDocument;
+var dldir; //Download dir where pgsg is exported to
+//Toggle these to false if you want to skip certain time-consuming tests
+var will_test_reliable_site_pubkey = false;
 
-setTimeout(function(){
-	//when this file is injected as content script in Chrome we must not run it
-	if (typeof(is_chrome) === 'undefined'){
-		return;
+function wait_for_browser_init(){
+	if (! browser_init_finished){
+		setTimeout(function(){wait_for_browser_init();}, 500);
 	}
 	else {
-		init_testing();
+		//sometimes Firefox consumes our tab with its own, so we wait longer
+		setTimeout(function(){init_testing();}, 2000);
 	}
-}, 2000);
+}
+wait_for_browser_init();
 
 
 function openURL(url){
-	if (is_chrome){
-		chrome.tabs.create({url:url});
-	}
-	else {
-		gBrowser.selectedTab = gBrowser.addTab(url);
-	}
+	//return new Promise(function(resolve, reject) {
+		if (is_chrome){
+			chrome.tabs.create({url:url}, function(t){
+				//resolve();
+			});
+		}
+		else {
+			gBrowser.selectedTab = gBrowser.addTab(url);
+			//resolve();
+		}
+	//});
 }
 
 
@@ -38,10 +47,17 @@ function wait_until_url_loaded(args){
 	var url = args.url;
 	var match_ending = (typeof args.match_ending !== 'undefined');
 	var notarizing = (typeof args.notarizing !== 'undefined');
+	var timerStarted = new Date().getTime()/1000;
+	var timeout = 20;
 	
 	return new Promise(function(resolve, reject) {
 		if (is_chrome){	
 			var check_if_loaded = function(url){
+				var now = new Date().getTime()/1000;
+				if ((now - timerStarted) > timeout){
+					reject('operation timed out');
+					return;
+				}
 				chrome.tabs.query({active: true}, function(t){
 					var is_url_matched = false;
 					if (match_ending){
@@ -54,9 +70,10 @@ function wait_until_url_loaded(args){
 					//ie placed by a listener into the var tabs
 					if (is_url_matched && (notarizing ? tabs.hasOwnProperty(t[0].id) : true)){
 						resolve();
+						return;
 					}
 					else {
-						console.log('url not yet loaded, waiting');
+						console.log('url ' + url + ' not yet loaded, waiting');
 						setTimeout(function(){check_if_loaded(url);}, 100);
 					}
 				});
@@ -65,6 +82,11 @@ function wait_until_url_loaded(args){
 		}
 		else {
 			var check_if_loaded = function(url){
+				var now = new Date().getTime()/1000;
+				if ((now - timerStarted) > timeout){
+					reject('operation timed out');
+					return;
+				}
 				var href = gBrowser.selectedBrowser.contentWindow.location.href;
 				var is_url_matched = false;
 				if (match_ending){
@@ -74,12 +96,24 @@ function wait_until_url_loaded(args){
 					is_url_matched = (href === url); 
 				}
 					
-				if (is_url_matched){
+				if (is_url_matched && !notarizing){
 					console.log('url matched, resolving');
 					resolve();
+					return;
+				}
+				else if (is_url_matched && notarizing){
+					if (dict_of_status.hasOwnProperty(url)){
+						console.log('notarized url matched, resolving');
+						resolve();
+						return;
+					}
+					else {
+						console.log('notarized url ' +url+ ' matched but it is not in dict yet');
+						setTimeout(function(){check_if_loaded(url);}, 500);
+					}
 				}
 				else {
-					console.log('url not yet loaded, waiting');
+					console.log('url '+	url +' not yet loaded, waiting');
 					setTimeout(function(){check_if_loaded(url);}, 500);
 				}
 			};
@@ -135,7 +169,7 @@ function test_reliable_site_pubkey(){
 	//just one or two failures may also mean incorrect padding
 	//we need to be sure that it is not padding but the flipped byte, hence 10 tries
 	//copied from main.js with tweaks
-	random_uid = Math.random().toString(36).slice(-10);
+	random_uid = Math.random().toString(36).slice(-7);
 	var tries = 0;
 	var loop = function(){
 		tries += 1;
@@ -187,15 +221,130 @@ function executeScript(code, argTabID){
 }
 
 
+//return the most recent PageSigner session's dir name
+function getMostRecentDirName(){
+	return new Promise(function(resolve, reject) {
+		var modTimes = {};
+		getDirContents('/')
+		.then(function(entries){
+			var promises = [];
+			
+			var gmt = function(entry){
+				return new Promise(function(resolve, reject) {
+					getModTime(entry)
+					.then(function(mt){
+						modTimes[mt] = getName(entry);
+						resolve();
+					});
+				});
+			};
+			
+			for (var i=0; i < entries.length; i++){
+				if (isDirectory(entries[i])){
+					promises.push(gmt(entries[i]));
+				}
+			}
+			return Promise.all(promises);
+		})
+		.then(function(){
+			var keys = Object.keys(modTimes);
+			var latest = keys[0];
+			for (var i=1; i < keys.length; i++){
+				if (keys[i] > latest){
+					latest = keys[i];
+				}
+			}
+			var dirname = modTimes[latest]; 
+			console.log(dirname);
+			resolve(dirname);
+		});
+	});
+}
+
+
+function checkDirContent(dirname){
+	return new Promise(function(resolve, reject) {
+	getFileContent(dirname, 'raw.txt')
+	.then(function(raw){
+		rawstr = ba2str(raw);
+		//the first 6 lines are Python's non-deterministic headers, cutting'em out
+		var x = rawstr.split('\r\n\r\n');
+		var headers = x[0];
+		var body = x[1];
+		headers = headers.split('\r\n').slice(6).join('\r\n') + '\r\n\r\n';
+		rawstr = headers + body;
+		return import_resource(['testing', 'testpage.html']);
+	})
+	.then(function(testpage_ba){
+		testpage_html = ba2str(testpage_ba);
+		testpage_raw = 'Header1: one\r\nHeader2: two\r\n\r\n'+testpage_html;
+		if (testpage_raw !== rawstr){
+			console.log('testpage_raw was', testpage_raw);
+			console.log('rawstr was', rawstr);
+			reject('rawstr mismatch');
+		}
+		return getFileContent(dirname, 'metaDomainName');
+	})
+	.then(function(ba){
+		if (ba2str(ba) !== '127.0.0.1'){
+			reject('metaDomainName mismatch');
+		};
+		return getFileContent(dirname, 'metaDataFilename');
+	})
+	.then(function(ba){
+		if (ba2str(ba) !== 'data.html'){
+			reject('metaDataFilename mismatch');
+		};
+		return getFileContent(dirname, 'meta');
+	})
+	.then(function(ba){
+		if (ba2str(ba) !== '127.0.0.1'){
+			reject('meta mismatch');
+		};
+		return getFileContent(dirname, 'data.html');
+	})
+	.then(function(ba){
+		//ignore the first 3 bytes - unicode marker
+		if (ba2str(ba.slice(3)) !== testpage_html){
+			reject('data.html mismatch');
+		}
+		else {
+			resolve();
+		}
+	});
+	});
+}
+
+/*
+ * List of tests:
+
+corrupt reliable site pubkey and make sure preparing PMS fails
+notarize a sample page and make sure the correct files are created in file system
+open manager and find the new session entry in the table
+rename the entry
+export the entry
+view the entry
+click 'view raw with http headers' button inside the view tab
+click raw from the manager tab
+delete entry
+import the pgsg that we exported earlier
+make sure correct files are created in file system
+make sure the imported entry is correctly reflected in manager table
+
+ */
+
+
 function init_testing(){
 	
 	console.log('in init_testing');
 	var test_url = 'https://127.0.0.1:4443/testpage.html';
-	var modTimes = {}; //{modtime: dirname} object
 	var rawstr;
 	var dirname;
+	var imported_dirname;
 	var testpage_html;
-	var new_random_name = Math.random().toString(36).slice(-10);
+	var new_random_name = Math.random().toString(36).slice(-7);
+	var pgsg; 
+	var timerStarted;
 	
 	return new Promise(function(resolve, reject) {
 		if (is_chrome){
@@ -221,7 +370,19 @@ function init_testing(){
 			var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
 			if (env.get("PAGESIGNER_TESTING_ON_FIREFOX") === 'true'){
 				console.log('PAGESIGNER TESTING')
-				resolve();
+				//prevent Safe Mode dialog from appearing
+				Services.prefs.getBranch("toolkit.startup.").setIntPref('max_resumed_crashes',-1);
+				//'Well this is embarassing' tab closes our first tab, disable it
+				Services.prefs.getBranch("browser.sessionstore.").setBoolPref('resume_from_crash', false);
+				//enable verbose mode (but verbosity will have effect only on next start)
+				Services.prefs.getBranch("extensions.pagesigner.").setBoolPref('verbose',true);
+				//Create tmpdir if doesnt exist
+				dldir = OS.Path.join(Cc["@mozilla.org/file/directory_service;1"].
+				   getService(Ci.nsIProperties).get("DfltDwnld", Ci.nsIFile).path, 'pagesigner.tmp.dir');
+				OS.File.makeDir(dldir)
+				.then(function(){
+					resolve();
+				})
 			}
 			else {
 				reject('not testing');
@@ -255,103 +416,36 @@ function init_testing(){
 		//add a notary+signing server pubkey
 		oracles_intact = true;
 		chosen_notary = testing_oracle;
-		return test_reliable_site_pubkey();
+		return will_test_reliable_site_pubkey ? test_reliable_site_pubkey() :
+			Promise.resolve();
 	})
 	.then(function(){
 		//automatically opentab and notarize it
+		//return openURL(test_url)
 		openURL(test_url);
-		return wait_until_url_loaded({url:test_url, notarizing:true});
+		//.then(function(){
+			return wait_until_url_loaded({url:test_url, notarizing:true});
+		//});
 	})
 	.then(function(){
 		return new Promise(function(resolve, reject) {
-			startNotarizing( function(){ resolve(); } );
-		});
+				startNotarizing( function(){ resolve(); } );
+			});
 	})
 	//make sure the correct files were created in the filesystem
 	.then(function(){
-		//get the most recent dir
-		return getDirContents('/');
+		return getMostRecentDirName();
 	})
-	.then(function(entries){
-		var promises = [];
-		
-		var gmt = function(entry){
-			return new Promise(function(resolve, reject) {
-				getModTime(entry)
-				.then(function(mt){
-					modTimes[mt] = getName(entry);
-					resolve();
-				});
-			});
-		};
-		
-		for (var i=0; i < entries.length; i++){
-			if (isDirectory(entries[i])){
-				promises.push(gmt(entries[i]));
-			}
-		}
-		return Promise.all(promises);
+	.then(function(name){
+		dirname = name;	
+		return checkDirContent(dirname);
 	})
 	.then(function(){
-		var keys = Object.keys(modTimes);
-		var latest = keys[0];
-		for (var i=1; i < keys.length; i++){
-			if (keys[i] > latest){
-				latest = keys[i];
-			}
-		}
-		dirname = modTimes[latest]; 
-		console.log(dirname);
-		return getFileContent(dirname, 'raw.txt');
-	})
-	.then(function(raw){
-		rawstr = ba2str(raw);
-		//the first 6 lines are Python's non-deterministic headers, cutting'em out
-		var x = rawstr.split('\r\n\r\n');
-		var headers = x[0];
-		var body = x [1];
-		headers = headers.split('\r\n').slice(6).join('\r\n') + '\r\n\r\n';
-		rawstr = headers + body;
-		return import_resource(['testing', 'testpage.html']);
-	})
-	.then(function(testpage_ba){
-		testpage_html = ba2str(testpage_ba);
-		testpage_raw = 'Header1: one\r\nHeader2: two\r\n\r\n'+testpage_html;
-		if (testpage_raw !== rawstr){
-			console.log('testpage_raw was', testpage_raw);
-			console.log('rawstr was', rawstr);
-			Promise.reject('rawstr mismatch');
-			return;
-		}
-		return getFileContent(dirname, 'metaDomainName');
+		return getFileContent(dirname, 'pgsg.pgsg');
 	})
 	.then(function(ba){
-		if (ba2str(ba) !== '127.0.0.1'){
-			Promise.reject('metaDomainName mismatch');
-			return;
-		};
-		return getFileContent(dirname, 'metaDataFilename');
-	})
-	.then(function(ba){
-		if (ba2str(ba) !== 'data.html'){
-			Promise.reject('metaDataFilename mismatch');
-			return;
-		};
-		return getFileContent(dirname, 'meta');
-	})
-	.then(function(ba){
-		if (ba2str(ba) !== '127.0.0.1'){
-			Promise.reject('meta mismatch');
-			return;
-		};
-		return getFileContent(dirname, 'data.html');
-	})
-	.then(function(ba){
-		//ignore the first 3 bytes - unicode marker
-		if (ba2str(ba.slice(3)) !== testpage_html){
-			Promise.reject('data.html mismatch');
-			return;
-		};
+		pgsg = ba; //we're gonna need pgsg later on when importing on Chrome
+		
 		//wait for the notarized page to pop up before we proceed
 		//otherwise the delayed opened tab may steal focus from manager tab
 		return wait_until_url_loaded({url:'data.html', match_ending:true});
@@ -359,10 +453,9 @@ function init_testing(){
 	.then(function(){
 		console.log('opening manager and waiting for it to load');
 		if (is_chrome){
-			//This is what menu does to open manager.
-			//in Chrome we cannot access the menu to click() on it. This is the next best thing.
-			chrome.runtime.sendMessage({'destination':'extension',
-										'message':'manage'});
+			//Chrome doesnt allow programmaticaly trigerring the popup
+			//so we open it as html and pass a hash, so that the popup triggers its own menu
+			openURL(chrome.runtime.getURL('content/chrome/popup.html#manage'));
 		}
 		else {
 			main.manage();
@@ -379,6 +472,7 @@ function init_testing(){
 			});
 		}
 		else {
+			manager_tabID = gBrowser.selectedTab;
 			return Promise.resolve();
 		}
 	})
@@ -387,7 +481,8 @@ function init_testing(){
 			if (is_chrome){
 				//wait for content script to be injected
 				var wait_for_content_script = function(){
-					executeScript('document.getElementById("content_script_injected_into_page").textContent')
+					executeScript('var managerDocument = document;' +
+								'document.getElementById("content_script_injected_into_page").textContent')
 					.then(function(result){
 						if (result !== 'true'){
 							console.log('content script not yet loaded, retrying');
@@ -478,11 +573,11 @@ function init_testing(){
 		console.log('waiting for the table to repopulate');
 		return new Promise(function(resolve, reject) {
 			var wait_for_repopulate = function(){
-				executeScript('wait_for_repopulate();')
+				executeScript('check_table_populated();')
 				.then(function(result){
 					if (result !== true){
 						console.log('the table hasnt yet repopulated, retrying');
-						setTimeout(function(){wait_for_repopulate();}, 100);
+						setTimeout(function(){wait_for_repopulate();}, 1000);
 					}
 					else {
 						resolve();
@@ -516,8 +611,7 @@ function init_testing(){
 	})
 	.then(function(ba){
 		if (ba2str(ba) !== new_random_name){
-			Promise.reject('new meta mismatch');
-			return;
+			return Promise.reject('new meta mismatch');
 		};
 		//export the file
 		return new Promise(function(resolve, reject) {
@@ -554,7 +648,7 @@ function init_testing(){
 		});	
 	})
 	.then(function(){
-		//check that the file was exported 
+		console.log('check that the file was exported (also save download dir location)');
 		return new Promise(function(resolve, reject) {
 			if (is_chrome){
 				var check_downloads = function(){
@@ -564,17 +658,18 @@ function init_testing(){
 							setTimeout(function(){check_downloads()}, 100);
 						}
 						else{
+							console.log(results);
+							var fullpath = results[0].filename;
+							var slash = os_win ? '\\' : '/';
+							dldir = fullpath.slice(0, fullpath.lastIndexOf(slash)+1);
 							resolve();
 						}
 					});
 				};
 				check_downloads();
 			}  	
-			else {
-				//TODO create tmp.dir
-				var dldir = Cc["@mozilla.org/file/directory_service;1"].
-				   getService(Ci.nsIProperties).get("DfltDwnld", Ci.nsIFile).path;
-				var dst = OS.Path.join(dldir, 'pagesigner.tmp.dir', new_random_name); 
+			else {				
+				var dst = OS.Path.join(dldir, new_random_name); 
 				function check_if_exists(path){
 					if (OS.File.exists(path)){
 						resolve();
@@ -588,27 +683,27 @@ function init_testing(){
 			}
 		});
 	})
-	.then(function(){		
+	.then(function(){	
+		console.log('clicking view');	
 		return new Promise(function(resolve, reject) {
 			executeScript('clickView("' + new_random_name + '");')
-				.then(function(result){	
-					if (result === true){
-						resolve();
-					}
-					else {
-						reject('error while clicking view');
-					}
+			.then(function(result){	
+				if (result === true){
+					resolve();
 				}
-			);
+				else {
+					reject('error while clicking view');
+				}
+			});
 		});	
 	})
 	.then(function(){
-		//wait for the view tab to become active
+		console.log('wait for the view tab to become active');
 		return wait_until_url_loaded({url:'data.html', match_ending:true});
 		//TODO match URL against *pagesigner.tmp.dir*data.html regex
 	})
 	.then(function(){
-		//get the id of viewTab so we can inject scripts on Chrome
+		console.log('get the id of viewTab so we can inject scripts on Chrome');
 		return new Promise(function(resolve, reject) {
 			if (is_chrome){
 				chrome.tabs.query({active: true}, function(t){
@@ -622,39 +717,33 @@ function init_testing(){
 		});
 	})
 	.then(function(){
-		//prepare the viewRawDocument var
+		console.log('sanity check that the page is ours');
 		return new Promise(function(resolve, reject) {
-			if (is_chrome){
-				executeScript('var viewRawDocument = document', view_tabID)
-				.then(function(){
-					resolve();
-				})
-			}
-			else {
-				viewRawDocument = gBrowser.getBrowserForTab(gBrowser.selectedTab).contentWindow.document;
-				resolve();
-			}
+			var wait_for_title = function(){
+				//in Chrome viewTabDocument may not be available yet because notification_bar wasnt injected
+				executeScript('if(typeof(viewTabDocument) === "undefined"){false;}' +
+							  'else{ var elements = viewTabDocument.getElementsByTagName("title");'+
+							  'elements.length === 0 ? false : elements[0].textContent;}',
+								 view_tabID)
+				.then(function(result){
+					if (result === false){
+						setTimeout(function(){wait_for_title();}, 100);
+					}
+					else if (result === 'PageSigner test page'){
+						resolve();
+					}
+					else {
+						reject('wrong page opened in View');
+					}
+				});
+			};
+			wait_for_title();
 		});
 	})
 	.then(function(){
-		//sanity check that the page is ours
+		console.log('wait for the notification tab to be injected');
 		return new Promise(function(resolve, reject) {
-			executeScript('viewRawDocument.getElementsByTagName("title")[0].textContent', view_tabID)
-			.then(function(result){
-				if (result === 'PageSigner test page'){
-					resolve();
-				}
-				else {
-					reject('wrong page opened in View');
-				}
-			});
-		});
-	})
-	.then(function(){
-		//wait for the notification tab to be injected
-		return new Promise(function(resolve, reject) {
-			var script = is_chrome ? 'viewRawDocument.getElementById("viewRaw")' :
-				'gBrowser.getNotificationBox().currentNotification';
+			var script = 'viewTabDocument.getElementById("viewRaw")';
 			var wait_for_view_raw = function(){
 				executeScript(script, view_tabID)
 				.then(function(result){
@@ -673,8 +762,7 @@ function init_testing(){
 	.then(function(){
 		console.log('pressing view raw button');
 		return new Promise(function(resolve, reject) {
-			var script = is_chrome ? 'viewRawDocument.getElementById("viewRaw").click()' :
-				'gBrowser.getNotificationBox().currentNotification.children[0].click()';
+			var script = 'viewTabDocument.getElementById("viewRaw").click()';
 			executeScript(script, view_tabID)
 			.then(function(result){
 				resolve();
@@ -763,7 +851,7 @@ function init_testing(){
 		console.log('waiting for table to repopulate');
 		return new Promise(function(resolve, reject) {
 			var wait_for_repopulate = function(){
-				executeScript('wait_for_repopulate();')
+				executeScript('check_table_populated();')
 				.then(function(result){
 					if (result !== true){
 						console.log('the table hasnt yet repopulated, retrying');
@@ -793,14 +881,99 @@ function init_testing(){
 	})
 	.then(function(){
 		//check that the dir is no more on disk
-		getDirEntry(new_random_name)
+		return getDirEntry(dirname)
 		.then(function(){
 			//no error
-			Promise.reject('dir still exists');
+			return Promise.reject('dir still exists');
 		})
 		.catch(function(what){
-			Promise.resolve()
+			return Promise.resolve()
 		});
+	})	
+	.then(function(data){
+		return new Promise(function(resolve, reject) {
+			executeScript("managerDocument.getElementById('table_populated').textContent = 'false';")
+			.then(function(){
+				//switch to manager tab so that we are not confused when the next tab opens
+				if (is_chrome){
+					var extraslash = os_win ? '\\' : '';
+					var path  = 'file://' + extraslash + dldir + new_random_name + '.pgsg';
+					import_resource(path, true)
+					.then(function(data){
+						chrome.tabs.update(manager_tabID, {active:true}, function(){
+							chrome.runtime.sendMessage({'destination':'extension',
+												'message':'import',
+												'args':{'data':data}});
+							resolve(wait_until_url_loaded({url:'data.html', match_ending:true}));
+						});
+					});
+				}
+				else {
+					gBrowser.selectedTab = manager_tabID;
+					testing_import_path = OS.Path.join(dldir, new_random_name + '.pgsg');
+					main.verify();
+					resolve(wait_until_url_loaded({url:'data.html', match_ending:true}));
+				}
+			});
+		});
+	})
+	.then(function(){
+		console.log('waiting for table to repopulate');
+		return new Promise(function(resolve, reject) {
+			var wait_for_repopulate = function(){
+				executeScript('check_table_populated();')
+				.then(function(result){
+					if (result !== true){
+						console.log('the table hasnt yet repopulated, retrying');
+						setTimeout(function(){wait_for_repopulate();}, 100);
+					}
+					else {
+						resolve();
+					}
+				});
+			};
+			wait_for_repopulate();
+		});			
+	})
+	.then(function(){
+		console.log('getting most recent dirname');
+		return getMostRecentDirName();
+	})
+	.then(function(name){
+		imported_dirname = name;
+		if (dirname === imported_dirname){
+			return Promise.reject('could not find imported dirname');
+		}
+		return checkDirContent(imported_dirname);
+	})
+	.then(function(name){
+		return getFileContent(imported_dirname, 'pgsg.pgsg');
+	})
+	.then(function(imported_pgsg){
+		if (imported_pgsg.toString() !== pgsg.toString()){
+			return Promise.reject('imported file does not match');
+		}
+		return Promise.resolve();
+	})
+	.then(function(){
+		console.log('making sure imported entry is in table');
+		return new Promise(function(resolve, reject) {
+			//imported dirs have -IMPORTED at the tail of the name
+			var parts = imported_dirname.split('-');
+			var partbefore = parts.slice(0, -2);
+			var partafter = parts.slice(-2, -1);
+			var text_to_find = [partbefore.join('-'), partafter].join(' , ');
+			
+			executeScript('assertEntryImported("' + text_to_find + '");')
+			.then(function(result){	
+				if (result === true){
+					resolve();
+				}
+				else {
+					reject('error: the imported entry is not in the table');
+				}
+			});
+		});	
 	})
 	.then(function(){
 		test_passed();

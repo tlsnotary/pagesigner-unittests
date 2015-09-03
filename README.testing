@@ -26,17 +26,21 @@ The script exits with return code 0 on success, 1 on failure.
 
 -----THE INFO BELOW IS RELEVANT ONLY IF YOU USE VIRTUALBOX-------
 
-My main OS is Linux. I use VirtualBox to test on Windows and OSX. Here is how I make the pagesigner dir from Linux available to the guest OS in VirtualBox:
+My main OS is Linux. I use VirtualBox to test on Windows and OSX. Here is my set-up.
 
-For Windows guest OS:
-	simply use VB's Shared Folders. Then in Windows Explorer select Map Network Drive and map the shared folder to a drive letter e.g. Z:\
+On Linux machine
+	apt-get install git-core
+	cd into the root folder where pagesigner,  pagesigner-oracles and pagesigner-unittests are located
+	git daemon --base-path=. --export-all --reuseaddr --informative-errors --verbose
 	
-For OSX guest OS:
+In VirtualBox GUI add a network adapter in Bridged Mode.
+From within Windows or OSX assign an IP address to this new adapter in the same subnet as the device the adapter is bridged with,
+i.e. if in Linux my wlan3 interface IP is 192.168.0.103 then the new adapter's IP should be 192.168.0.*
 
-(note that OSX has issues communicating with Linux's Samba server, so I used AFP protocol)
-- in Linux sudo apt-get install nettalk
-- in VB add a new network adapter in Bridged Mode 
-- in OSX System Preferences-Network manually assign IP that is in the same subnet as your Linux's IP
-i.e. if your bridged adapter's IP in Linux is 10.0.11.12, then in OSX choose 10.0.11.33 (mask 255.255.255.0)
-- in OSX Finder->Go->Connect to Server enter afp://10.0.11.12 followed when prompted by Linux user's password
-- in Terminal your mounted share will be available in /Volumes/Home Directory/
+From within the VirtualBox:
+	install git (on Windows, dont choose to convert newlines) and run
+	git clone git://192.168.0.103/pagesigner
+	git clone git://192.168.0.103/pagesigner-oracles
+	git clone git://192.168.0.103/pagesigner-unittests
+	
+Before running the test, you must git pull any changes.
