@@ -48,7 +48,7 @@ function wait_until_url_loaded(args){
 	var match_ending = (typeof args.match_ending !== 'undefined');
 	var notarizing = (typeof args.notarizing !== 'undefined');
 	var timerStarted = new Date().getTime()/1000;
-	var timeout = 20;
+	var timeout = 60;
 	
 	return new Promise(function(resolve, reject) {
 		if (is_chrome){	
