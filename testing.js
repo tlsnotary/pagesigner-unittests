@@ -199,6 +199,95 @@ function test_reliable_site_pubkey(){
 }
 
 
+//TODO test timeout when connect() 
+function test_socket(){
+	return new Promise(function(globalresolve, globalreject) {
+		var sckt1 = new Socket('127.0.0.1', 16441);
+		var sckt2 = new Socket('127.0.0.1', 16442);
+		var sckt3 = new Socket('127.0.0.1', 16443);
+		var sckt4 = new Socket('127.0.0.1', 16444);
+		
+		return sckt1.connect()
+		.then(function resolved(){
+			console.log('shouldnt get here');
+			globalreject();
+		}, function rejected(){
+			//reject()ed as expected
+			console.log('testing connect() passed');
+			return Promise.resolve();
+		})
+		.then(function(){
+			return new Promise(function(resolve, reject) {
+				sckt2.recv_timeout = 2*1000;
+				var timeout = setTimeout(function(){
+					globalreject('recv didnt timeout after 2 seconds as expected');
+				}, 3*1000);
+				sckt2.connect()
+				.then(function() {
+					return sckt2.recv();
+				})
+				.then(function resolved(){
+					globalreject('recv wasnt supposed to resolve');
+				}, function rejected(what){
+					console.log('rejected', what);
+					if (what !== 'recv: socket timed out'){
+						globalreject('recv rejected with wrong message');
+					}
+					else {
+						clearTimeout(timeout);
+						console.log('recv timeout test passed');
+						resolve();
+					}
+				});
+			});
+		})
+		.then(function(){
+			return new Promise(function(resolve, reject) {
+				var timeout;
+				sckt3.connect()
+				.then(function(){
+					timeout = setTimeout(function(){
+						reject('received complete records didnt timeout after 1 second as expected');
+					}, 2*1000);
+					return sckt3.recv();
+				})
+				.then(function resolved(){
+					clearTimeout(timeout);
+					console.log('complete record timeout test passed');
+					resolve();
+				}, function rejected(what){
+					globalreject('complete record timeout test failed ', what);
+				});
+			});
+		})
+		.then(function(){
+			//we dont want to timeout because we are testing the 
+			//complete/incomplete records logic
+			sckt4.recv_timeout = 999999*1000;
+			return sckt4.connect();
+		})
+		.then(function(){
+			console.log('random test');
+			sckt4.send(str2ba('hello world'));
+			return sckt4.recv();
+		})
+		.then(function(data_with_md5){
+			//the last TLS record of 21 bytes contains a 16-byte md5 hash of all records
+			var data = data_with_md5.slice(0, -21);
+			var md5sum = data_with_md5.slice(-16);
+			var check_md5sum = md5(data);
+			if (check_md5sum.toString() === md5sum.toString()){
+				console.log('socket test passed');
+				globalresolve();
+			}
+			else {
+				console.log('socket test failed');
+				globalreject();
+			}
+		});
+	});
+}
+
 function executeScript(code, argTabID){
 	return new Promise(function(resolve, reject) {
 		if (! is_chrome){
@@ -418,6 +507,9 @@ function init_testing(){
 		chosen_notary = testing_oracle;
 		return will_test_reliable_site_pubkey ? test_reliable_site_pubkey() :
 			Promise.resolve();
+	})
+	.then(function(){
+		return test_socket();
 	})
 	.then(function(){
 		//automatically opentab and notarize it

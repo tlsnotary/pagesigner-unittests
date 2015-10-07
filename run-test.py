@@ -9,6 +9,7 @@ import os
 import sys
 import platform
 import random
+import hashlib
 
 OS = platform.system()
 shared_memory = '/dev/shm'
@@ -56,6 +57,86 @@ def reliable_site_thread():
     httpd = http.server.HTTPServer(('127.0.0.1', 5443), http.server.SimpleHTTPRequestHandler)
     httpd.socket = ssl.wrap_socket (httpd.socket, keyfile=os.path.join(unittests_dir, 'certs', 'reliable.priv'), certfile=os.path.join(unittests_dir, 'certs', 'reliable_chain.cert'), server_side=True)
     httpd.serve_forever()
+
+def build_random_records():
+    rec_no = random.randint(10, 20)
+    recs = [] #records as well as timeout values [bytes(), 0.6, bytes(), bytes(), ...]
+    for i in range(rec_no):
+        rec_len = random.randint(1024, 65530)
+        rec_header = b'\x16\x03\x01' + rec_len.to_bytes(2, byteorder='big')
+        tls_record = rec_header + bytes(rec_len)
+        recs.append(tls_record)
+    #the last record contains md5sum
+    recs_flat = b''.join(r for r in recs)
+    md5obj = hashlib.md5(recs_flat)
+    recs.append(b'\x16\x03\x01' + len(md5obj.digest()).to_bytes(2, byteorder='big') + md5obj.digest())
+    print('length of records ', len(recs_flat))
+    print ('md5sum is ', md5obj.hexdigest())
+
+    positions = random.sample(range(1, len(recs)), int(rec_no / 4))
+    positions.sort()
+    for i,pos in enumerate(positions):
+        recs.insert(pos+i, random.randint(1,9)/10)
+
+    splitrecs = [] #records as well as timeout values [bytes(), 0.6, bytes(), bytes(), ...]
+    for rec in recs:
+        if isinstance(rec, float):
+            splitrecs.append(rec)
+            continue
+        if random.randint(1, 3) != 3:
+            #split every 3rd record
+            splitrecs.append(rec)
+            continue
+        split_pos = random.randint(1, len(rec))
+        splitrecs.append(rec[:split_pos])
+        splitrecs.append(random.randint(1,30)/10)
+        splitrecs.append(rec[split_pos:])
+    return splitrecs    
+
+
+def socket_tester_thread():
+    #socket that cannot be connected to because it is not listening
+    sock1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock1.bind(('127.0.0.1', 16441))
+
+    #socket that can be connected to but that sends no data - to test recv() timeout
+    sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock2.bind(('127.0.0.1', 16442))
+    sock2.listen(1)
+
+    #this socket must be opened in advance
+    sock4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock4.bind(('127.0.0.1', 16444))
+    sock4.listen(1) 
+
+    #socket to test complete record timeout
+    sock3 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock3.bind(('127.0.0.1', 16443))
+    sock3.listen(1)
+    s3, client_address = sock3.accept()
+    s3.send(b'\x16\x03\x01\x00\x01\xff' )
+
+    s4, client_address = sock4.accept()
+    data_in = s4.recv(1024)
+    if data_in.decode() != 'hello world':
+        error = 'failed to receive hello world, test failed'
+        s4.send(error.encode())
+        s4.close()
+        print(error)
+        return
+    #randomly send complete/incomplete records
+    print('building random records')
+    recs = build_random_records()
+    #recs contains records as well as timeout values [bytes(), 0.6, bytes(), bytes(), ...]
+    for rec in recs:
+        if isinstance(rec, float):
+            time.sleep(rec)
+            continue
+        s4.send(rec)
 
 
 def testing_verdict_thread(parentthread, port):
@@ -273,6 +354,7 @@ if __name__ == "__main__":
 
         threading.Thread(target=server_thread, daemon=True).start()
         threading.Thread(target=reliable_site_thread, daemon=True).start()
+        threading.Thread(target=socket_tester_thread, daemon=True).start()
         #notary and signing oracles expect the keys in /dev/shm
         shutil.copy(os.path.join(certs_dir, 'main_server_private.priv'), os.path.join(shared_memory, 'main_server_private.pem'))
         shutil.copy(os.path.join(certs_dir, 'main_server_public.pub'), os.path.join(shared_memory, 'main_server_public.pem'))
