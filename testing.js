@@ -1,14 +1,11 @@
 var testing_oracle = 
 {'name':'testingoracle',
-'main': {
 	'IP':'127.0.0.1',
-	'port':'10011'
-},
-'sig': {
+	'port':'10011',
 	'modulus':['will be read from file']
 }
-}
 var verdictport;
+var portdelta;
 var manager_tabID;
 var view_tabID;
 var viewRawDocument;
@@ -202,10 +199,10 @@ function test_reliable_site_pubkey(){
 //TODO test timeout when connect() 
 function test_socket(){
 	return new Promise(function(globalresolve, globalreject) {
-		var sckt1 = new Socket('127.0.0.1', 16441);
-		var sckt2 = new Socket('127.0.0.1', 16442);
-		var sckt3 = new Socket('127.0.0.1', 16443);
-		var sckt4 = new Socket('127.0.0.1', 16444);
+		var sckt1 = new Socket('127.0.0.1', 16441+portdelta);
+		var sckt2 = new Socket('127.0.0.1', 16442+portdelta);
+		var sckt3 = new Socket('127.0.0.1', 16443+portdelta);
+		var sckt4 = new Socket('127.0.0.1', 16444+portdelta);
 		
 		return sckt1.connect()
 		.then(function resolved(){
@@ -247,8 +244,8 @@ function test_socket(){
 				sckt3.connect()
 				.then(function(){
 					timeout = setTimeout(function(){
-						reject('received complete records didnt timeout after 1 second as expected');
-					}, 2*1000);
+						reject('received complete records didnt timeout after 4 second as expected');
+					}, 4*1000);
 					return sckt3.recv();
 				})
 				.then(function resolved(){
@@ -438,6 +435,7 @@ function init_testing(){
 	return new Promise(function(resolve, reject) {
 		if (is_chrome){
 			verdictport = '11557';
+			portdelta = 0
 			chrome.tabs.query({url:'http://127.0.0.1:0/pagesigner_testing_on_chrome'}, function(tabs){
 				if (tabs.length == 1){
 					chrome.management.get(appId, function(a){
@@ -455,7 +453,8 @@ function init_testing(){
 			});
 		}
 		else { //on firefox
-			verdictport = '11558';
+			verdictport = '12557';
+			portdelta = 1000;
 			var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
 			if (env.get("PAGESIGNER_TESTING_ON_FIREFOX") === 'true'){
 				console.log('PAGESIGNER TESTING')
@@ -497,7 +496,7 @@ function init_testing(){
 		for(var i=0; i<numbers_str.length; i++){
 			modulus.push(parseInt(numbers_str[i]));
 		}
-		testing_oracle.sig.modulus = modulus;
+		testing_oracle.modulus = modulus;
 		return import_resource(['testing', 'rootCA.cert']);
 	})
 	.then(function(text_ba){

@@ -20,8 +20,8 @@ pagesigner_dir = os.path.join(parent_dir, 'pagesigner')
 os.chdir(unittests_dir)
 returncode = None #wll be set by verdict thread
 
-notaryproc = None
 signingproc = None
+notaryproc = None
 chromeproc = None
 ffproc = None
 firefox_path = None
@@ -94,31 +94,34 @@ def build_random_records():
     return splitrecs    
 
 
-def socket_tester_thread():
+def socket_tester_thread(portdelta):
+	#portdelta 0 for chrome 1000 for firefox
     #socket that cannot be connected to because it is not listening
     sock1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock1.bind(('127.0.0.1', 16441))
+    sock1.bind(('127.0.0.1', 16441+portdelta))
 
     #socket that can be connected to but that sends no data - to test recv() timeout
     sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock2.bind(('127.0.0.1', 16442))
+    sock2.bind(('127.0.0.1', 16442+portdelta))
     sock2.listen(1)
 
     #this socket must be opened in advance
     sock4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock4.bind(('127.0.0.1', 16444))
+    sock4.bind(('127.0.0.1', 16444+portdelta))
     sock4.listen(1) 
 
-    #socket to test complete record timeout
+    #socket to test complete record timeout by sending an incomplete record
     sock3 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock3.bind(('127.0.0.1', 16443))
+    sock3.bind(('127.0.0.1', 16443+portdelta))
     sock3.listen(1)
     s3, client_address = sock3.accept()
-    s3.send(b'\x16\x03\x01\x00\x01\xff' )
+    #if sending immediately the helper app may not pick it up
+    time.sleep(0.1)
+    s3.send(b'\x16\x03\x01\x00\x01\xff')
 
     s4, client_address = sock4.accept()
     data_in = s4.recv(1024)
@@ -294,11 +297,7 @@ if __name__ == "__main__":
                 f.write(normal_cert+rootCA_cert)
             with open(os.path.join(certs_dir, 'reliable_chain.cert'), 'wb') as f:
                 f.write(reliable_cert+rootCA_cert)
-
-            #generate notary->sigserver communication key & the signing key
-            print('generating notary server cert')
-            subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(certs_dir, 'main_server_private.priv'), '4096'])
-            subprocess.call([openssl_path, 'rsa', '-in', os.path.join(certs_dir, 'main_server_private.priv'), '-outform', 'PEM', '-pubout', '-out', os.path.join(certs_dir, 'main_server_public.pub')])
+           
             print('generating signing server cert')
             subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(certs_dir, 'signing_server_private.priv'), '4096'])
             subprocess.call([openssl_path, 'rsa', '-in', os.path.join(certs_dir, 'signing_server_private.priv'), '-outform', 'PEM', '-pubout', '-out', os.path.join(certs_dir, 'signing_server_public.pub')])
@@ -354,21 +353,15 @@ if __name__ == "__main__":
 
         threading.Thread(target=server_thread, daemon=True).start()
         threading.Thread(target=reliable_site_thread, daemon=True).start()
-        threading.Thread(target=socket_tester_thread, daemon=True).start()
-        #notary and signing oracles expect the keys in /dev/shm
-        shutil.copy(os.path.join(certs_dir, 'main_server_private.priv'), os.path.join(shared_memory, 'main_server_private.pem'))
-        shutil.copy(os.path.join(certs_dir, 'main_server_public.pub'), os.path.join(shared_memory, 'main_server_public.pem'))
-        shutil.copy(os.path.join(certs_dir, 'signing_server_private.priv'), os.path.join(shared_memory, 'signing_server_private.pem'))
+        threading.Thread(target=socket_tester_thread, daemon=True, args=(0,)).start()
+        threading.Thread(target=socket_tester_thread, daemon=True, args=(1000,)).start()
+        #notary oracle expects the keys in /dev/shm
+        shutil.copy(os.path.join(certs_dir, 'signing_server_private.priv'), os.path.join(shared_memory, 'private.pem'))
         shutil.copy(os.path.join(certs_dir, 'signing_server_public.pub'), os.path.join(shared_memory, 'signing_server_public.pem'))
         #Let notary server know about our testing reliable site's pubkey
         shutil.copy(os.path.join(certs_dir, 'reliable_site_pubkey.txt'), os.path.join(parent_dir, 'pagesigner-oracles', 'notary', 'pubkeys.txt'))
-        notaryproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'notary', 'notaryserver.py'), 'shared_memory='+shared_memory, 'openssl_path='+openssl_path])
-        time.sleep(1)
-        #tell the notary server the IP of the signing server
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(('127.0.0.1', 10011))
-        sock.send(b'127.0.0.1')
-        sock.close()
+        
+        notaryproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'notary', 'notaryserver.py')])
         signingproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'signing_server', 'signing_server.py'), 'shared_memory='+shared_memory, 'openssl_path='+openssl_path])
         
         shutil.copy(os.path.join(unittests_dir, 'testing.js'), os.path.join(pagesigner_dir, 'content', 'testing', 'testing.js'))
@@ -381,7 +374,6 @@ if __name__ == "__main__":
         shutil.copy(os.path.join(unittests_dir, 'certs', 'rootCA.cert'), 
                                    os.path.join(pagesigner_dir, 'content', 'testing', 'rootCA.cert'))
 
-        shutil.copy(os.path.join(certs_dir, 'main_server_private.priv'), os.path.join(shared_memory, 'main_server_private.pem'))        
         if not firefoxonly:
             print('Starting Chrome')
             chromeproc = subprocess.Popen([chrome_path, 'http://127.0.0.1:0/pagesigner_testing_on_chrome', '--profile-directory=PageSigner', '--load-extension='+pagesigner_dir, '--allow-insecure-localhost'])
@@ -417,7 +409,7 @@ if __name__ == "__main__":
             chromevt.daemon = True
             chromevt.start()
         if not chromeonly:
-            ffvt = ThreadWithRetval(target=testing_verdict_thread, args=(11558,))
+            ffvt = ThreadWithRetval(target=testing_verdict_thread, args=(12557,))
             ffvt.daemon = True
             ffvt.start()
         if not firefoxonly:

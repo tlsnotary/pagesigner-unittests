@@ -16,7 +16,8 @@ Before running the actual test, prepare the environment:
 5. In Firefox goto
 	5.1 Edit->Preferences->Advanced->Certificates->View Certificates->Authorities->Import 
 	and choose pagesigner-unittests/certs/rootCA.cert select Trust this CA to identify websites -> OK
-	5.2 Tools->Add-ons->Extensions, enable PageSigner
+	5.2 in about:config change xpinstall.signatures.required to false
+	5.3 Tools->Add-ons->Extensions, enable PageSigner
 6. On Linux and OSX terminate run-test.py with Ctrl+C (it will close Chrome and Firefox automatically). On Windows use Ctrl+Break and close browsers manually.
 
 After preparing the environment, you can run the actual test:
