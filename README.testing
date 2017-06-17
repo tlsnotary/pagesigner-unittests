@@ -9,16 +9,18 @@ The script can be launched on any OS (install OpenSSL-Win32 on Win and python3 o
 
 Before running the actual test, prepare the environment:
 
-1. Make sure the dirs "pagesigner-unittests", "pagesigner-oracles" and "pagesigner" are in the same dir
-2. Make sure Chrome is not running (including the background process systray icon)
-3. Run python3 run-test.py
-4. In Chrome install the helper app from the PageSigner menu.
-5. In Firefox goto
+- Make sure the dirs "pagesigner-unittests", "pagesigner-oracles" and "pagesigner" are in the same dir
+- Make sure Chrome is not running (including the background process systray icon)
+- Run python3 run-test.py
+- In Chrome install the helper app from the PageSigner menu.
+- on Linux if Firefox fails to start, you may need to disable AppArmor for Firefox temporarily until next reboot with sudo apparmor_parser -R /etc/apparmor.d/usr.bin.firefox
+- In Firefox (version 52, may not work with future versions) goto
 	5.1 Edit->Preferences->Advanced->Certificates->View Certificates->Authorities->Import 
 	and choose pagesigner-unittests/certs/rootCA.cert select Trust this CA to identify websites -> OK
 	5.2 in about:config change xpinstall.signatures.required to false
 	5.3 Tools->Add-ons->Extensions, enable PageSigner
-6. On Linux and OSX terminate run-test.py with Ctrl+C (it will close Chrome and Firefox automatically). On Windows use Ctrl+Break and close browsers manually.
+- Depending on Firefox version you may need to go to about:debugging#addons -> Load Temporary Add-on and then load PageSigner for the test to actually start 
+- On Linux and OSX terminate run-test.py with Ctrl+C (it will close Chrome and Firefox automatically). On Windows use Ctrl+Break and close browsers manually.
 
 After preparing the environment, you can run the actual test:
 python3 run-test.py 

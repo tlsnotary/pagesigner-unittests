@@ -16,6 +16,7 @@ shared_memory = '/dev/shm'
 unittests_dir =  os.path.dirname(os.path.realpath(__file__))
 parent_dir = os.path.dirname(unittests_dir)
 pagesigner_dir = os.path.join(parent_dir, 'pagesigner')
+testing_dir = os.path.join(pagesigner_dir, 'webextension', 'content', 'testing')
 #set current working dir so this script could be run from any location
 os.chdir(unittests_dir)
 returncode = None #wll be set by verdict thread
@@ -326,7 +327,7 @@ if __name__ == "__main__":
             subprocess.call([openssl_path, 'genrsa', '-out', os.path.join(verifychain_dir, 'unknown_rootCA.priv'), '4096'])
             #create self-signed root CA cert
             subprocess.call([openssl_path, 'req', '-x509', '-new', '-nodes', '-subj',  '/CN=TLSNOTARY_UNKNOWN', '-key', os.path.join(verifychain_dir, 'unknown_rootCA.priv'), '-days', '1024', '-outform', 'der', '-out', os.path.join(verifychain_dir, 'unknown_rootCA.certder')])
-            shutil.copy(os.path.join(verifychain_dir, 'unknown_rootCA.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'unknown_rootCA.certder'))
+            shutil.copy(os.path.join(verifychain_dir, 'unknown_rootCA.certder'), os.path.join(testing_dir, 'unknown_rootCA.certder'))
             #in order to corrupt the sig, we must know what the sig is
             #no_signame because otherwise the starttoken is printed twice
             output = subprocess.check_output([openssl_path, 'x509', '-text', '-certopt', 'no_signame', '-in', os.path.join(certs_dir, 'normal.cert')])
@@ -347,8 +348,8 @@ if __name__ == "__main__":
                 normalcertder[sigstart+bad_byte_pos+1:]
             with open(os.path.join(verifychain_dir, 'normal_badsig.certder'), 'wb') as f:
                 f.write(normalcert_with_badsig)
-            shutil.copy(os.path.join(unittests_dir, 'certs', 'rootCA.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'rootCA.certder'))
-            shutil.copy(os.path.join(verifychain_dir, 'normal_badsig.certder'), os.path.join(pagesigner_dir, 'content', 'testing', 'normal_badsig.certder'))
+            shutil.copy(os.path.join(unittests_dir, 'certs', 'rootCA.certder'), os.path.join(testing_dir, 'rootCA.certder'))
+            shutil.copy(os.path.join(verifychain_dir, 'normal_badsig.certder'), os.path.join(testing_dir, 'normal_badsig.certder'))
            
 
         threading.Thread(target=server_thread, daemon=True).start()
@@ -364,15 +365,17 @@ if __name__ == "__main__":
         notaryproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'notary', 'notaryserver.py')])
         signingproc = subprocess.Popen([python3_path, os.path.join(parent_dir, 'pagesigner-oracles', 'signing_server', 'signing_server.py'), 'shared_memory='+shared_memory, 'openssl_path='+openssl_path])
         
-        shutil.copy(os.path.join(unittests_dir, 'testing.js'), os.path.join(pagesigner_dir, 'content', 'testing', 'testing.js'))
-        shutil.copy(os.path.join(unittests_dir, 'manager_test.js'), os.path.join(pagesigner_dir, 'content', 'testing', 'manager_test.js'))
-        shutil.copy(os.path.join(unittests_dir, 'testpage.html'), os.path.join(pagesigner_dir, 'content', 'testing', 'testpage.html'))
+        shutil.copy(os.path.join(unittests_dir, 'testing.js'), os.path.join(testing_dir, 'testing.js'))
+        shutil.copy(os.path.join(unittests_dir, 'manager_test.js'), os.path.join(testing_dir, 'manager_test.js'))
+        shutil.copy(os.path.join(unittests_dir, 'viewer_test.js'), os.path.join(testing_dir, 'viewer_test.js'))
+        shutil.copy(os.path.join(unittests_dir, 'file_picker_test.js'), os.path.join(testing_dir, 'file_picker_test.js'))
+        shutil.copy(os.path.join(unittests_dir, 'testpage.html'), os.path.join(testing_dir, 'testpage.html'))
         shutil.copy(os.path.join(unittests_dir, 'certs', 'reliable_site_pubkey.txt'), 
-                    os.path.join(pagesigner_dir, 'content', 'testing', 'reliable_site_pubkey.txt'))
+                    os.path.join(testing_dir, 'reliable_site_pubkey.txt'))
         shutil.copy(os.path.join(unittests_dir, 'certs', 'signing_server_pubkey.txt'), 
-                            os.path.join(pagesigner_dir, 'content', 'testing', 'signing_server_pubkey.txt'))
+                            os.path.join(testing_dir, 'signing_server_pubkey.txt'))
         shutil.copy(os.path.join(unittests_dir, 'certs', 'rootCA.cert'), 
-                                   os.path.join(pagesigner_dir, 'content', 'testing', 'rootCA.cert'))
+                                   os.path.join(testing_dir, 'rootCA.cert'))
 
         if not firefoxonly:
             print('Starting Chrome')
@@ -401,7 +404,7 @@ if __name__ == "__main__":
                     f.write(pagesigner_dir.encode())
             os.putenv('PAGESIGNER_TESTING_ON_FIREFOX', 'true')
             print('Starting Firefox')
-            ffproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir])
+            ffproc = subprocess.Popen([firefox_path, '--new-instance', '--profile', firefox_profile_dir, 'http://127.0.0.1:0/pagesigner_testing_on_firefox'])
     
         #LIsten for a sign from the backend that test passed/failed
         if not firefoxonly:

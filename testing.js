@@ -6,12 +6,15 @@ var testing_oracle =
 }
 var verdictport;
 var portdelta;
-var manager_tabID;
-var view_tabID;
-var viewRawDocument;
-var dldir; //Download dir where pgsg is exported to
+
 //Toggle these to false if you want to skip certain time-consuming tests
-var will_test_reliable_site_pubkey = false;
+var will_test_reliable_site_pubkey = true;
+var will_test_socket = true;
+
+var portManagerTest = null; //communication between testing.js and manager_test.js
+var portViewerTest = null; //communication between testing.js and viewer_test.js
+var portFilePickerTest = null; //communication between testing.js and file_picker_test.js
+
 
 function wait_for_browser_init(){
 	if (! browser_init_finished){
@@ -26,17 +29,9 @@ wait_for_browser_init();
 
 
 function openURL(url){
-	//return new Promise(function(resolve, reject) {
-		if (is_chrome){
-			chrome.tabs.create({url:url}, function(t){
-				//resolve();
-			});
-		}
-		else {
-			gBrowser.selectedTab = gBrowser.addTab(url);
-			//resolve();
-		}
-	//});
+	chrome.tabs.create({url:url}, function(t){
+		//resolve();
+	});
 }
 
 
@@ -48,74 +43,33 @@ function wait_until_url_loaded(args){
 	var timeout = 60;
 	
 	return new Promise(function(resolve, reject) {
-		if (is_chrome){	
-			var check_if_loaded = function(url){
-				var now = new Date().getTime()/1000;
-				if ((now - timerStarted) > timeout){
-					reject('operation timed out');
-					return;
-				}
-				chrome.tabs.query({active: true}, function(t){
-					var is_url_matched = false;
-					if (match_ending){
-						is_url_matched = t[0].url.endsWith(url);
-					}
-					else {
-						is_url_matched = (t[0].url === url); 
-					}
-					//urls that we will notarize must be "loaded"
-					//ie placed by a listener into the var tabs
-					if (is_url_matched && (notarizing ? tabs.hasOwnProperty(t[0].id) : true)){
-						resolve();
-						return;
-					}
-					else {
-						console.log('url ' + url + ' not yet loaded, waiting');
-						setTimeout(function(){check_if_loaded(url);}, 100);
-					}
-				});
-			};
-			check_if_loaded(url);
+
+	var check_if_loaded = function(url){
+		var now = new Date().getTime()/1000;
+		if ((now - timerStarted) > timeout){
+			reject('operation timed out');
+			return;
 		}
-		else {
-			var check_if_loaded = function(url){
-				var now = new Date().getTime()/1000;
-				if ((now - timerStarted) > timeout){
-					reject('operation timed out');
-					return;
-				}
-				var href = gBrowser.selectedBrowser.contentWindow.location.href;
-				var is_url_matched = false;
-				if (match_ending){
-					is_url_matched = href.endsWith(url);
-				}
-				else {
-					is_url_matched = (href === url); 
-				}
-					
-				if (is_url_matched && !notarizing){
-					console.log('url matched, resolving');
-					resolve();
-					return;
-				}
-				else if (is_url_matched && notarizing){
-					if (dict_of_status.hasOwnProperty(url)){
-						console.log('notarized url matched, resolving');
-						resolve();
-						return;
-					}
-					else {
-						console.log('notarized url ' +url+ ' matched but it is not in dict yet');
-						setTimeout(function(){check_if_loaded(url);}, 500);
-					}
-				}
-				else {
-					console.log('url '+	url +' not yet loaded, waiting');
-					setTimeout(function(){check_if_loaded(url);}, 500);
-				}
-			};
-			check_if_loaded(url);
-		}
+		chrome.tabs.query({active: true}, function(t){
+			var is_url_matched = false;
+			if (match_ending){
+				is_url_matched = t[0].url.endsWith(url);
+			}
+			else {
+				is_url_matched = (t[0].url === url); 
+			}
+			if (is_url_matched){
+				resolve();
+				return;
+			}
+			else {
+				console.log('url ' + url + ' not yet loaded, waiting');
+				setTimeout(function(){check_if_loaded(url);}, 100);
+			}
+		});
+	};
+	check_if_loaded(url);
+	
 	});
 }
 
@@ -123,17 +77,17 @@ function wait_until_url_loaded(args){
 function test_verifychain(){
 	var rootCAder;
 	var badsignormalder;
-	return import_resource(['testing', 'unknown_rootCA.certder'])
+	return import_resource('testing/unknown_rootCA.certder')
 	.then(function(dercert){
 		if (verifyCertChain([dercert])){
 			Promise.reject('unknown CA verified');
 		}
 		console.log('unknown CA test passed');
-		return import_resource(['testing', 'rootCA.certder'])
+		return import_resource('testing/rootCA.certder')
 	})
 	.then(function(der){
 		rootCAder = der;
-		return import_resource(['testing', 'normal_badsig.certder'])
+		return import_resource('testing/normal_badsig.certder')
 	})
 	.then(function(der){
 		badsignormalder = der;
@@ -166,7 +120,7 @@ function test_reliable_site_pubkey(){
 	//just one or two failures may also mean incorrect padding
 	//we need to be sure that it is not padding but the flipped byte, hence 10 tries
 	//copied from main.js with tweaks
-	random_uid = Math.random().toString(36).slice(-7);
+	random_uid = Math.random().toString(36).slice(-10);
 	var tries = 0;
 	var loop = function(){
 		tries += 1;
@@ -204,6 +158,7 @@ function test_socket(){
 		var sckt3 = new Socket('127.0.0.1', 16443+portdelta);
 		var sckt4 = new Socket('127.0.0.1', 16444+portdelta);
 		
+		console.log('socket test: connect to a closed port')
 		return sckt1.connect()
 		.then(function resolved(){
 			console.log('shouldnt get here');
@@ -215,6 +170,7 @@ function test_socket(){
 		})
 		.then(function(){
 			return new Promise(function(resolve, reject) {
+				console.log('socket test: should timeout while receiving data');
 				sckt2.recv_timeout = 2*1000;
 				var timeout = setTimeout(function(){
 					globalreject('recv didnt timeout after 2 seconds as expected');
@@ -240,6 +196,7 @@ function test_socket(){
 		})
 		.then(function(){
 			return new Promise(function(resolve, reject) {
+				console.log('socket test: should timeout while waiting for complete record');
 				var timeout;
 				sckt3.connect()
 				.then(function(){
@@ -285,65 +242,28 @@ function test_socket(){
 	});
 }
 
-function executeScript(code, argTabID){
-	return new Promise(function(resolve, reject) {
-		if (! is_chrome){
-			var retval = eval(code);
-			resolve(retval);
-		}
-		else {
-			var tabID = manager_tabID;
-			if (typeof(argTabID) !== 'undefined'){
-				tabID = argTabID;
-			}
-			chrome.tabs.executeScript(tabID, {code:code},
-			function(result){
-				resolve(result[0]);
-			});
-			
-		}
-	});
-	
-}
 
 
 //return the most recent PageSigner session's dir name
 function getMostRecentDirName(){
 	return new Promise(function(resolve, reject) {
-		var modTimes = {};
-		getDirContents('/')
-		.then(function(entries){
-			var promises = [];
-			
-			var gmt = function(entry){
-				return new Promise(function(resolve, reject) {
-					getModTime(entry)
-					.then(function(mt){
-						modTimes[mt] = getName(entry);
-						resolve();
-					});
-				});
-			};
-			
-			for (var i=0; i < entries.length; i++){
-				if (isDirectory(entries[i])){
-					promises.push(gmt(entries[i]));
-				}
-			}
-			return Promise.all(promises);
-		})
-		.then(function(){
-			var keys = Object.keys(modTimes);
-			var latest = keys[0];
-			for (var i=1; i < keys.length; i++){
-				if (keys[i] > latest){
-					latest = keys[i];
-				}
-			}
-			var dirname = modTimes[latest]; 
-			console.log(dirname);
-			resolve(dirname);
+
+	chrome.storage.local.get(null, function(items){
+		var keys = Object.keys(items);
+		var sessions = [];
+		for (var i=0; i < keys.length; i++){
+			if (! keys[i].startsWith('session')) continue;
+			sessions.push(keys[i]);
+		}
+		var sessions_before = sessions;
+		//create sort order based on creation time
+		sessions.sort(function (a,b){
+			var as = a.creationTime, bs = b.creationTime;
+			return as == bs ? 0: (as > bs ? 1 : -1);
 		});
+		resolve(sessions[sessions.length - 1]);	
+	});
+	
 	});
 }
 
@@ -352,14 +272,14 @@ function checkDirContent(dirname){
 	return new Promise(function(resolve, reject) {
 	getFileContent(dirname, 'raw.txt')
 	.then(function(raw){
-		rawstr = ba2str(raw);
+		rawstr = raw;
 		//the first 6 lines are Python's non-deterministic headers, cutting'em out
 		var x = rawstr.split('\r\n\r\n');
 		var headers = x[0];
 		var body = x[1];
 		headers = headers.split('\r\n').slice(6).join('\r\n') + '\r\n\r\n';
 		rawstr = headers + body;
-		return import_resource(['testing', 'testpage.html']);
+		return import_resource('testing/testpage.html');
 	})
 	.then(function(testpage_ba){
 		testpage_html = ba2str(testpage_ba);
@@ -371,27 +291,27 @@ function checkDirContent(dirname){
 		}
 		return getFileContent(dirname, 'metaDomainName');
 	})
-	.then(function(ba){
-		if (ba2str(ba) !== '127.0.0.1'){
+	.then(function(str){
+		if (str !== '127.0.0.1'){
 			reject('metaDomainName mismatch');
 		};
 		return getFileContent(dirname, 'metaDataFilename');
 	})
-	.then(function(ba){
-		if (ba2str(ba) !== 'data.html'){
+	.then(function(str){
+		if (str !== 'data.html'){
 			reject('metaDataFilename mismatch');
 		};
 		return getFileContent(dirname, 'meta');
 	})
-	.then(function(ba){
-		if (ba2str(ba) !== '127.0.0.1'){
+	.then(function(str){
+		if (str !== '127.0.0.1'){
 			reject('meta mismatch');
 		};
 		return getFileContent(dirname, 'data.html');
 	})
-	.then(function(ba){
+	.then(function(str){
 		//ignore the first 3 bytes - unicode marker
-		if (ba2str(ba.slice(3)) !== testpage_html){
+		if (str !== testpage_html){
 			reject('data.html mismatch');
 		}
 		else {
@@ -400,6 +320,39 @@ function checkDirContent(dirname){
 	});
 	});
 }
+
+
+function findAndCloseRawTab(){
+	return new Promise(function(resolve, reject) {
+	
+	function check(){
+		console.log('in findAndCloseRawTab check');			
+		findAndCloseRawTab.count++;
+		if (findAndCloseRawTab.count > 10){
+			console.log('raw tab didnt appear')
+			reject('raw tab didnt appear');
+			return;
+		}
+		
+		chrome.tabs.query({active:true}, function(t){
+			if (t[0].title !== 'PageSigner raw viewer') {
+				setTimeout(check, 100);
+				return;
+			}
+			//else
+			chrome.tabs.remove(t[0].id, function(){
+				//set to 0 for the next test's invocation
+				findAndCloseRawTab.count = 0;
+				resolve();
+			});
+		});
+	};
+	check();
+	
+	});
+}
+findAndCloseRawTab.count = 0;
+
 
 /*
  * List of tests:
@@ -429,66 +382,69 @@ function init_testing(){
 	var imported_dirname;
 	var testpage_html;
 	var new_random_name = Math.random().toString(36).slice(-7);
-	var pgsg; 
+	var pgsg;
+	var creationTime;
 	var timerStarted;
 	
+
 	return new Promise(function(resolve, reject) {
-		if (is_chrome){
-			verdictport = '11557';
-			portdelta = 0
-			chrome.tabs.query({url:'http://127.0.0.1:0/pagesigner_testing_on_chrome'}, function(tabs){
-				if (tabs.length == 1){
-					chrome.management.get(appId, function(a){
-						if (typeof(a) === 'undefined'){
-							reject('app not installed');
-						}
-						else {
-							resolve();
-						}
-					});
-				}
-				else {
-					reject('not testing');
-				}
-			});
-		}
-		else { //on firefox
-			verdictport = '12557';
-			portdelta = 1000;
-			var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
-			if (env.get("PAGESIGNER_TESTING_ON_FIREFOX") === 'true'){
-				console.log('PAGESIGNER TESTING')
-				//prevent Safe Mode dialog from appearing
+		var url_suffix = is_chrome ? 'chrome' : 'firefox';
+		var signal_url = 'http://127.0.0.1:0/pagesigner_testing_on_' + url_suffix;
+		console.log('signal url is', signal_url);
+		//firefox has issues is signal_url is passed as a filter
+		chrome.tabs.query({url: ['<all_urls>']}, function(tabs){
+			console.log('got tabs', tabs)
+			if (tabs.length != 1){
+				reject('couldnt find open tab with signal url');
+			}
+			else if (tabs[0].url != signal_url){
+				reject('couldnt find signal url in open tab');
+			}
+			else {
+				setup();
+			}
+		});
+		
+		function setup(){
+			if (is_chrome){
+				verdictport = '11557';
+				portdelta = 0
+				chrome.management.get(appId, function(a){
+					if (typeof(a) === 'undefined'){
+						reject('app not installed');
+					}
+					else {
+						resolve();
+					}
+				});
+			}
+			else { //on firefox
+				verdictport = '12557';
+				portdelta = 1000;
+				resolve();
+				return;
+				
 				Services.prefs.getBranch("toolkit.startup.").setIntPref('max_resumed_crashes',-1);
 				//'Well this is embarassing' tab closes our first tab, disable it
 				Services.prefs.getBranch("browser.sessionstore.").setBoolPref('resume_from_crash', false);
 				//enable verbose mode (but verbosity will have effect only on next start)
 				Services.prefs.getBranch("extensions.pagesigner.").setBoolPref('verbose',true);
-				//Create tmpdir if doesnt exist
-				dldir = OS.Path.join(Cc["@mozilla.org/file/directory_service;1"].
-				   getService(Ci.nsIProperties).get("DfltDwnld", Ci.nsIFile).path, 'pagesigner.tmp.dir');
-				OS.File.makeDir(dldir)
-				.then(function(){
-					resolve();
-				})
-			}
-			else {
-				reject('not testing');
 			}
 		}
 	})
 	.then(function(){
-		testing = true; //makes startNotarizing call a callback when done
+		testing = true;
+		return setPref('testing', true);
+	})
+	.then(function(){
 		setTimeout(test_verifychain, 0);
-		return import_resource(['testing', 'reliable_site_pubkey.txt']);
+		return import_resource('testing/reliable_site_pubkey.txt');
 	})
 	.then(function(text_ba){
 		reliable_sites = [];
 		parse_reliable_sites(ba2str(text_ba));
 		reliable_sites[0]['port'] = 5443;
-	})
-	.then(function(){
-		return import_resource(['testing', 'signing_server_pubkey.txt']);
+		return import_resource('testing/signing_server_pubkey.txt');
 	})
 	.then(function(text_ba){
 		var numbers_str = ba2str(text_ba).split(',');
@@ -497,7 +453,7 @@ function init_testing(){
 			modulus.push(parseInt(numbers_str[i]));
 		}
 		testing_oracle.modulus = modulus;
-		return import_resource(['testing', 'rootCA.cert']);
+		return import_resource('testing/rootCA.cert');
 	})
 	.then(function(text_ba){
 		certs['CN=TLSNOTARY/'] = ba2str(text_ba);
@@ -508,524 +464,198 @@ function init_testing(){
 			Promise.resolve();
 	})
 	.then(function(){
-		return test_socket();
-	})
-	.then(function(){
-		//automatically opentab and notarize it
-		//return openURL(test_url)
-		openURL(test_url);
-		//.then(function(){
-			return wait_until_url_loaded({url:test_url, notarizing:true});
-		//});
-	})
-	.then(function(){
-		return new Promise(function(resolve, reject) {
-				startNotarizing( function(){ resolve(); } );
-			});
-	})
-	//make sure the correct files were created in the filesystem
-	.then(function(){
-		return getMostRecentDirName();
-	})
-	.then(function(name){
-		dirname = name;	
-		return checkDirContent(dirname);
-	})
-	.then(function(){
-		return getFileContent(dirname, 'pgsg.pgsg');
-	})
-	.then(function(ba){
-		pgsg = ba; //we're gonna need pgsg later on when importing on Chrome
-		
-		//wait for the notarized page to pop up before we proceed
-		//otherwise the delayed opened tab may steal focus from manager tab
-		return wait_until_url_loaded({url:'data.html', match_ending:true});
-	})
-	.then(function(){
-		console.log('opening manager and waiting for it to load');
-		if (is_chrome){
-			//Chrome doesnt allow programmaticaly trigerring the popup
-			//so we open it as html and pass a hash, so that the popup triggers its own menu
-			openURL(chrome.runtime.getURL('content/chrome/popup.html#manage'));
+		if (will_test_socket){
+			return test_socket;
 		}
 		else {
-			main.manage();
-		}
-		return wait_until_url_loaded({url:manager_path});						
-	})
-	.then(function(){
-		console.log('chrome: getting manager tab ID');
-		if (is_chrome){
-			//get the manager tab ID
-			chrome.tabs.query({active:true}, function(tabs){
-				manager_tabID = tabs[0].id;
-				return Promise.resolve();
-			});
-		}
-		else {
-			manager_tabID = gBrowser.selectedTab;
 			return Promise.resolve();
 		}
 	})
 	.then(function(){
-		return new Promise(function(resolve, reject) {
-			if (is_chrome){
-				//wait for content script to be injected
-				var wait_for_content_script = function(){
-					executeScript('var managerDocument = document;' +
-								'document.getElementById("content_script_injected_into_page").textContent')
-					.then(function(result){
-						if (result !== 'true'){
-							console.log('content script not yet loaded, retrying');
-							setTimeout(function(){wait_for_content_script();}, 100);
-						}
-						else {
-							resolve();
-						}
-					});
-				};
-				wait_for_content_script();
-			}
-			else {
-				resolve();
-			}
-		});
+		//automatically opentab and notarize it
+		openURL(test_url);
+		return wait_until_url_loaded({url:test_url, notarizing:true});
 	})
 	.then(function(){
-		return new Promise(function(resolve, reject) {	
-			if (is_chrome){
-				chrome.tabs.executeScript(manager_tabID, 
-					{file:'content/testing/manager_test.js'},
-					function(){
-						resolve();
-					});
-			}
-			else {
-				resolve();
-			}
-		});
+		notarizeNowSelected();
+		var prefix = is_chrome ? 'webextension/' : '';
+		var viewer_url = chrome.extension.getURL(prefix+'content/viewer.html'); 
+		return wait_until_url_loaded({url:viewer_url, notarizing:true});
+
 	})
-	.then(function(){
-		console.log('wait for table_populated to be set to true');
-		return new Promise(function(resolve, reject) {
-			var wait_for_variable = function(){
-				executeScript('check_table_populated()')
-				.then(function(result){
-					if (result !== true){
-						console.log('table is not yet populated, retrying');
-						setTimeout(function(){wait_for_variable();}, 100);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			wait_for_variable();
-		});
+	//make sure the correct files were created in the filesystem
+	.then(getMostRecentDirName)
+	.then(function(name){
+		console.log('most recent dir is', name);
+		dirname = name;	
+		return checkDirContent(dirname);
 	})
-	.then(function(){
-		console.log('finding entry in table');
-		return new Promise(function(resolve, reject) {
-			var parts = dirname.split('-');
-			var partbefore = parts.slice(0, -1);
-			var partafter = parts.slice(-1);
-			var text_to_find = [partbefore.join('-'), partafter].join(' , ');
-		
-			executeScript('findDirnameInTable("' + text_to_find + '");')
-			.then(function(result){
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('could not find entry in the table');
-				}
-			});
-		});
-	})
-	.then(function(){
-		console.log('renaming table entry');
-		return new Promise(function(resolve, reject) {
-			var rename = function(newname){
-				executeScript('renameEntry("' + newname + '");')
-				.then(function(result){
-					if (result !== true){
-						console.log('rename dialog is not yet ready, retrying');
-						setTimeout(function(){rename(newname);}, 100);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			rename(new_random_name);
-		});		
-	})
-	.then(function(){
-		console.log('waiting for the table to repopulate');
-		return new Promise(function(resolve, reject) {
-			var wait_for_repopulate = function(){
-				executeScript('check_table_populated();')
-				.then(function(result){
-					if (result !== true){
-						console.log('the table hasnt yet repopulated, retrying');
-						setTimeout(function(){wait_for_repopulate();}, 1000);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			wait_for_repopulate();
-		});			
-	})
-	.then(function(){
-		
-		return new Promise(function(resolve, reject) {
-			var findNewName = function(newname){
-				executeScript('findNewName("' + newname + '");')
-				.then(function(result){
-					if (result !== true){
-						console.log('findNewName returned false, retrying');
-						setTimeout(function(){findNewName(newname);}, 100);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			findNewName(new_random_name);
-		});		
-	})
-	.then(function(){
-		//check that the changed name is also correctly reflected in file system
-		return getFileContent(dirname, 'meta');
+	.then(() => getFileContent(dirname, 'creationTime'))
+	.then(function(ct){
+		creationTime = ct;
+		return getFileContent(dirname, 'pgsg.pgsg');
 	})
 	.then(function(ba){
-		if (ba2str(ba) !== new_random_name){
-			return Promise.reject('new meta mismatch');
+		pgsg = ba; //we're gonna need pgsg later on when importing on Chrome
+
+		return new Promise(function(resolve, reject) {
+
+		chrome.runtime.onConnect.addListener(function(p){
+			console.log('in testing got port', p);
+			if (p.name == 'manager_test.js-to-testing.js'){
+				if (portManagerTest){
+					console.log('portManager already activated');
+					return;
+				}
+				portManagerTest = p;
+				portManagerTest.onMessage.addListener(messageListener);
+				portManagerTest.postMessage({cmd: 'check that table has been populated1'});
+			}
+			else if ((p.name == 'viewer_test.js-to-testing.js') && !portViewerTest){
+				portViewerTest = p;
+				portViewerTest.onMessage.addListener(messageListener);
+			}
+			else if ((p.name == 'file_picker_test.js-to-testing.js') && !portFilePickerTest){
+				portFilePickerTest = p;
+				portFilePickerTest.onMessage.addListener(messageListener);
+			}
+			else {
+				console.log('unknown port name or duplicate port', p.name);
+			}
+		});
+		
+		console.log('opening manager');
+		var prefix = is_chrome ? 'webextension/' : '';
+		var url = chrome.extension.getURL(prefix+'content/popup.html');
+		openURL(url);
+
+		function messageListener(m){
+			console.log('messageListener got msg', m);
+			if (m.rv == false) {
+				reject(m.cmd);
+				return;
+			}
+			if (m.cmd == 'check that table has been populated1'){
+			    portManagerTest.postMessage({cmd: 'find entry in table', entry: creationTime});
+		    }
+		    else if (m.cmd == 'find entry in table'){
+				portManagerTest.postMessage({cmd: 'rename entry', entry: new_random_name});
+			}
+			else if (m.cmd == 'rename entry'){
+				portManagerTest.postMessage({cmd: 'check that table has been populated2'});
+			}
+			else if (m.cmd == 'check that table has been populated2'){
+				portManagerTest.postMessage({cmd: 'find new entry', entry: new_random_name});
+			}
+			else if (m.cmd == 'find new entry'){
+				
+				//check that the changed name is also correctly reflected in file system
+				getFileContent(dirname, 'meta')	
+				.then(function(str){
+					if (str !== new_random_name){
+						reject('new meta mismatch');
+					}
+					else {
+						portManagerTest.postMessage({cmd: 'export file', entry: new_random_name});
+					}
+				});
+			}
+			else if (m.cmd == 'export file'){
+				portManagerTest.postMessage({cmd: 'dismiss export warning'});
+			}
+			else if (m.cmd == 'dismiss export warning'){
+				portManagerTest.postMessage({cmd: 'click view', entry: new_random_name});
+			}
+			else if (m.cmd == 'click view'){
+			
+				//portViewer becomes available when viewer_test.js is loaded
+				function checkPortViewerTest(){
+					console.log('in checkPortViewerTest');
+					checkPortViewerTest.count++;
+					if (checkPortViewerTest.count > 10) { reject('checkPortViewerTest'); return; }
+					if (portViewerTest == null) { setTimeout(checkPortViewerTest, 100); }
+					else { portViewerTest.postMessage({cmd: 'view raw'}); }
+				}
+				checkPortViewerTest.count = 0;
+				checkPortViewerTest();
+			}
+			else if (m.cmd == 'view raw'){
+				findAndCloseRawTab()
+				.then(function(){
+					console.log('sending click raw');
+					portManagerTest.postMessage({cmd: 'click raw', entry: new_random_name});
+				});
+			}
+			else if (m.cmd == 'click raw'){
+				findAndCloseRawTab()
+				.then(function(){
+					portManagerTest.postMessage({cmd: 'click delete', entry: new_random_name});
+				});
+			}
+			else if (m.cmd == 'click delete'){
+				portManagerTest.postMessage({cmd: 'check that table has been populated3'});
+			}
+			else if (m.cmd == 'check that table has been populated3'){
+				portManagerTest.postMessage({cmd: 'check that entry is gone', entry:new_random_name});
+			}
+			else if (m.cmd == 'check that entry is gone'){
+				console.log('opening file picker');
+				var prefix = is_chrome ? 'webextension/' : '';
+				var url = chrome.extension.getURL(prefix+'content/file_picker.html');
+				openURL(url);
+				
+				//portFilePicker becomes available when file_picker_test.js is loaded
+				function checkPortFilePickerTest(){
+					console.log('in checkPortFilePickerTest');
+					checkPortFilePickerTest.count++;
+					if (checkPortFilePickerTest.count > 10) { reject('checkPortFilePickerTest'); return; }
+					if (portFilePickerTest == null) { setTimeout(checkPortFilePickerTest, 100); }
+					else {			 
+						portFilePickerTest.postMessage({cmd: 'import pgsg', data: pgsg}); 
+					}
+				}
+				checkPortFilePickerTest.count = 0;
+				checkPortFilePickerTest();				
+			}
+			else if (m.cmd == 'import pgsg'){
+				portManagerTest.postMessage({cmd: 'check that table has been populated4'});
+			}
+			else if (m.cmd == 'check that table has been populated4'){
+				getMostRecentDirName()
+				.then(function(imported_name){
+					return getFileContent(imported_name, 'creationTime');
+				})
+				.then(function(creationTime){
+					setTimeout(function(){
+					portManagerTest.postMessage({cmd: 'check if imported', ct:creationTime});
+					}, 5000);
+				});
+			}
+			else if (m.cmd == 'check if imported'){
+				console.log('resolving after check if imported');
+				resolve();
+				return;
+			}
+			else {
+				reject();
+			}
 		};
-		//export the file
-		return new Promise(function(resolve, reject) {
-			executeScript('exportFile("' + new_random_name + '");')
-				.then(function(result){	
-					if (result === true){
-						resolve();
-					}
-					else {
-						reject('error while exporting');
-					}
-				}
-			);
-		});	
-	})
-	.then(function(){
-		//wait for the export warning and press OK
-		//export the file
-		return new Promise(function(resolve, reject) {
-			var dismissExportWarning = function(){
-				executeScript('dismissExportWarning();')
-					.then(function(result){	
-						if (result === true){
-							resolve();
-						}
-						else {
-							console.log('export warning hasnt shown yet, retrying');
-							setTimeout(function(){dismissExportWarning();}, 100);
-						}
-					}
-				);
-			};
-			dismissExportWarning();
-		});	
-	})
-	.then(function(){
-		console.log('check that the file was exported (also save download dir location)');
-		return new Promise(function(resolve, reject) {
-			if (is_chrome){
-				var check_downloads = function(){
-					chrome.downloads.search({filenameRegex:'.*'+new_random_name+'.*'}, function(results){
-						if (results.length !== 1){
-							console.log('file not yet exported, retrying');
-							setTimeout(function(){check_downloads()}, 100);
-						}
-						else{
-							console.log(results);
-							var fullpath = results[0].filename;
-							var slash = os_win ? '\\' : '/';
-							dldir = fullpath.slice(0, fullpath.lastIndexOf(slash)+1);
-							resolve();
-						}
-					});
-				};
-				check_downloads();
-			}  	
-			else {				
-				var dst = OS.Path.join(dldir, new_random_name); 
-				function check_if_exists(path){
-					if (OS.File.exists(path)){
-						resolve();
-					}
-					else {
-						console.log('export file does not exists yet, retrying');
-						setTimeout(function(){check_if_exists(path)}, 100);
-					}
-				};
-				check_if_exists(dst);
-			}
-		});
-	})
-	.then(function(){	
-		console.log('clicking view');	
-		return new Promise(function(resolve, reject) {
-			executeScript('clickView("' + new_random_name + '");')
-			.then(function(result){	
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('error while clicking view');
-				}
-			});
-		});	
-	})
-	.then(function(){
-		console.log('wait for the view tab to become active');
-		return wait_until_url_loaded({url:'data.html', match_ending:true});
-		//TODO match URL against *pagesigner.tmp.dir*data.html regex
-	})
-	.then(function(){
-		console.log('get the id of viewTab so we can inject scripts on Chrome');
-		return new Promise(function(resolve, reject) {
-			if (is_chrome){
-				chrome.tabs.query({active: true}, function(t){
-					view_tabID = t[0].id;
-					resolve();
-				});
-			}
-			else {
-				resolve();
-			}
+		
 		});
 	})
 	.then(function(){
-		console.log('sanity check that the page is ours');
+		console.log('session must not be in storage', dirname);
+		//the deleted session must not be in storage
 		return new Promise(function(resolve, reject) {
-			var wait_for_title = function(){
-				//in Chrome viewTabDocument may not be available yet because notification_bar wasnt injected
-				executeScript('if(typeof(viewTabDocument) === "undefined"){false;}' +
-							  'else{ var elements = viewTabDocument.getElementsByTagName("title");'+
-							  'elements.length === 0 ? false : elements[0].textContent;}',
-								 view_tabID)
-				.then(function(result){
-					if (result === false){
-						setTimeout(function(){wait_for_title();}, 100);
-					}
-					else if (result === 'PageSigner test page'){
-						resolve();
-					}
-					else {
-						reject('wrong page opened in View');
-					}
-				});
-			};
-			wait_for_title();
+
+		chrome.storage.local.get(dirname, function(obj){
+			console.log('objects in storage', obj);
+			if (Object.keys(obj).length == 0) {resolve();}
+			else { reject('session still in storage'); }
 		});
-	})
-	.then(function(){
-		console.log('wait for the notification tab to be injected');
-		return new Promise(function(resolve, reject) {
-			var script = 'viewTabDocument.getElementById("viewRaw")';
-			var wait_for_view_raw = function(){
-				executeScript(script, view_tabID)
-				.then(function(result){
-					if (result === null){
-						console.log('notification not yet injected, retrying');
-						setTimeout(function(){wait_for_view_raw();}, 100);
-					}
-					else {
-						resolve()
-					}
-				});
-			};
-			wait_for_view_raw();
-		});
-	})
-	.then(function(){
-		console.log('pressing view raw button');
-		return new Promise(function(resolve, reject) {
-			var script = 'viewTabDocument.getElementById("viewRaw").click()';
-			executeScript(script, view_tabID)
-			.then(function(result){
-				resolve();
-			});
-		});
-	})
-	.then(function(){
-		console.log('waiting view raw tab to appear');
-		var url = is_chrome ? 
-			'filesystem:chrome-extension://' + chrome.runtime.id + '/persistent/' + dirname + '/raw.txt' :
-			OS.Path.toFileURI(OS.Path.join(fsRootPath, dirname, 'raw.txt'));
-		return wait_until_url_loaded({url:url});
-	})
-	.then(function(){
-		console.log('closing view raw tab');
-		//close this tab just in case to prevent confusion
-		//because in the next test we'll open a tab with the same URL
-		return new Promise(function(resolve, reject) {
-			if (is_chrome){
-				chrome.tabs.query({active:true}, function(t){
-					chrome.tabs.remove(t[0].id, function(){
-						resolve();
-					});
-				});
-			}
-			else {
-				gBrowser.removeCurrentTab();
-				resolve();
-			}
-		});
-	})
-	.then(function(){
-		console.log('clicking raw from the manager');
-		return new Promise(function(resolve, reject) {
-			executeScript('clickRaw("' + new_random_name + '");')
-			.then(function(result){	
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('error while clicking raw');
-				}
-			});
-		});	
-	})
-	.then(function(){
-		console.log('waiting for raw tab to open');
-		var url = is_chrome ? 
-			'filesystem:chrome-extension://' + chrome.runtime.id + '/persistent/' + dirname + '/raw.txt' :
-			OS.Path.toFileURI(OS.Path.join(fsRootPath, dirname, 'raw.txt'));
-		return wait_until_url_loaded({url:url});
-	})
-	.then(function(){
-		console.log('clicking delete from the manager');
-		return new Promise(function(resolve, reject) {
-			executeScript('clickDelete("' + new_random_name + '");')
-			.then(function(result){	
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('error while clicking delete');
-				}
-			});
-		});	
-	})
-	.then(function(){
-	console.log('waiting for delete confirmation dialog and pressing OK');
-		return new Promise(function(resolve, reject) {
-			var confirmDelete = function(){
-				executeScript('confirmDelete();')
-				.then(function(result){	
-					if (result === true){
-						resolve();
-					}
-					else {
-						console.log('delete confirmation hasnt shown yet, retrying');
-						setTimeout(function(){confirmDelete();}, 100);
-					}
-				});
-			};
-			confirmDelete();
-		});	
-	})
-	.then(function(){
-		console.log('waiting for table to repopulate');
-		return new Promise(function(resolve, reject) {
-			var wait_for_repopulate = function(){
-				executeScript('check_table_populated();')
-				.then(function(result){
-					if (result !== true){
-						console.log('the table hasnt yet repopulated, retrying');
-						setTimeout(function(){wait_for_repopulate();}, 100);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			wait_for_repopulate();
-		});			
-	})
-	.then(function(){
-		console.log('making sure the entry is not in the table anymore');
-		return new Promise(function(resolve, reject) {
-			executeScript('checkThatEntryIsGone("' + new_random_name + '");')
-			.then(function(result){	
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('error: the entry was still present in the table');
-				}
-			});
-		});	
-	})
-	.then(function(){
-		//check that the dir is no more on disk
-		return getDirEntry(dirname)
-		.then(function(){
-			//no error
-			return Promise.reject('dir still exists');
-		})
-		.catch(function(what){
-			return Promise.resolve()
+		
 		});
 	})	
-	.then(function(data){
-		return new Promise(function(resolve, reject) {
-			executeScript("managerDocument.getElementById('table_populated').textContent = 'false';")
-			.then(function(){
-				//switch to manager tab so that we are not confused when the next tab opens
-				if (is_chrome){
-					var extraslash = os_win ? '\\' : '';
-					var path  = 'file://' + extraslash + dldir + new_random_name + '.pgsg';
-					import_resource(path, true)
-					.then(function(data){
-						chrome.tabs.update(manager_tabID, {active:true}, function(){
-							chrome.runtime.sendMessage({'destination':'extension',
-												'message':'import',
-												'args':{'data':data}});
-							resolve(wait_until_url_loaded({url:'data.html', match_ending:true}));
-						});
-					});
-				}
-				else {
-					gBrowser.selectedTab = manager_tabID;
-					testing_import_path = OS.Path.join(dldir, new_random_name + '.pgsg');
-					main.verify();
-					resolve(wait_until_url_loaded({url:'data.html', match_ending:true}));
-				}
-			});
-		});
-	})
-	.then(function(){
-		console.log('waiting for table to repopulate');
-		return new Promise(function(resolve, reject) {
-			var wait_for_repopulate = function(){
-				executeScript('check_table_populated();')
-				.then(function(result){
-					if (result !== true){
-						console.log('the table hasnt yet repopulated, retrying');
-						setTimeout(function(){wait_for_repopulate();}, 100);
-					}
-					else {
-						resolve();
-					}
-				});
-			};
-			wait_for_repopulate();
-		});			
-	})
 	.then(function(){
 		console.log('getting most recent dirname');
 		return getMostRecentDirName();
@@ -1037,34 +667,12 @@ function init_testing(){
 		}
 		return checkDirContent(imported_dirname);
 	})
-	.then(function(name){
-		return getFileContent(imported_dirname, 'pgsg.pgsg');
-	})
+	.then(() => getFileContent(imported_dirname, 'pgsg.pgsg'))
 	.then(function(imported_pgsg){
 		if (imported_pgsg.toString() !== pgsg.toString()){
 			return Promise.reject('imported file does not match');
 		}
 		return Promise.resolve();
-	})
-	.then(function(){
-		console.log('making sure imported entry is in table');
-		return new Promise(function(resolve, reject) {
-			//imported dirs have -IMPORTED at the tail of the name
-			var parts = imported_dirname.split('-');
-			var partbefore = parts.slice(0, -2);
-			var partafter = parts.slice(-2, -1);
-			var text_to_find = [partbefore.join('-'), partafter].join(' , ');
-			
-			executeScript('assertEntryImported("' + text_to_find + '");')
-			.then(function(result){	
-				if (result === true){
-					resolve();
-				}
-				else {
-					reject('error: the imported entry is not in the table');
-				}
-			});
-		});	
 	})
 	.then(function(){
 		test_passed();
