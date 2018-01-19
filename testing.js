@@ -295,11 +295,11 @@ function checkDirContent(dirname){
 		if (str !== '127.0.0.1'){
 			reject('metaDomainName mismatch');
 		};
-		return getFileContent(dirname, 'metaDataFilename');
+		return getFileContent(dirname, 'dataType');
 	})
 	.then(function(str){
-		if (str !== 'data.html'){
-			reject('metaDataFilename mismatch');
+		if (str !== 'html'){
+			reject('dataType mismatch');
 		};
 		return getFileContent(dirname, 'meta');
 	})
@@ -307,12 +307,12 @@ function checkDirContent(dirname){
 		if (str !== '127.0.0.1'){
 			reject('meta mismatch');
 		};
-		return getFileContent(dirname, 'data.html');
+		return getFileContent(dirname, 'data');
 	})
-	.then(function(str){
+	.then(function(ba){
 		//ignore the first 3 bytes - unicode marker
-		if (str !== testpage_html){
-			reject('data.html mismatch');
+		if (ba2str(ba) !== testpage_html){
+			reject('data mismatch');
 		}
 		else {
 			resolve();
@@ -465,7 +465,7 @@ function init_testing(){
 	})
 	.then(function(){
 		if (will_test_socket){
-			return test_socket;
+      return test_socket();
 		}
 		else {
 			return Promise.resolve();
